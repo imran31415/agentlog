@@ -23,6 +23,29 @@ generate-db: install-sqlc
 init-db:
 	mysql -h $(DB_HOST) -u $(DB_USER) -p$(DB_PASSWORD) < sql/schema.sql
 
+# Run database migrations
+migrate:
+	DB_URL=$(DB_URL) go run cmd/migrate/main.go
+
+# Show migration status
+migrate-status:
+	DB_URL=$(DB_URL) go run cmd/migrate/main.go -status
+
+# Build migration tool
+build-migrate:
+	go build -o bin/migrate ./cmd/migrate
+
+# Generate protobuf Go code
+generate-proto:
+	protoc --go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		proto/gogent.proto
+
+# Install protobuf tools
+install-proto-tools:
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
 # Run backend tests
 run-tests:
 	go test ./...

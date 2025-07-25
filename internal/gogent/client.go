@@ -49,6 +49,16 @@ func NewClient(dbURL string, config *types.GeminiClientConfig) (*Client, error) 
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	// Run database migrations
+	migrationManager := db.NewMigrationManager(database)
+	migrationsDir := "sql/migrations"
+	if err := migrationManager.RunMigrations(migrationsDir); err != nil {
+		log.Printf("⚠️ Warning: failed to run migrations: %v", err)
+		// Continue without migrations rather than failing completely
+	} else {
+		log.Printf("✅ Database migrations completed successfully")
+	}
+
 	queries := db.New(database)
 
 	client := &Client{
@@ -2092,6 +2102,77 @@ func (c *Client) getLogEmoji(level types.LogLevel, category types.LogCategory) s
 			return "📝"
 		}
 	}
+}
+
+// GetSystemConfigurations retrieves all system-wide AI configurations from the database
+func (c *Client) GetSystemConfigurations(ctx context.Context) ([]types.APIConfiguration, error) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	// Get all configurations and filter for system ones
+	configRows, err := c.queries.ListAPIConfigurations(ctx, db.ListAPIConfigurationsParams{
+		Limit:  100, // Reasonable limit for system configurations
+		Offset: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get configurations: %w", err)
+	}
+
+	var systemConfigs []types.APIConfiguration
+	for _, row := range configRows {
+		// Check if this is a system configuration
+		if row.UserID == "system" {
+			config := types.APIConfiguration{
+				ID:             row.ID,
+				ExecutionRunID: row.ExecutionRunID,
+				VariationName:  row.VariationName,
+				ModelName:      row.ModelName,
+				SystemPrompt:   row.SystemPrompt.String,
+				CreatedAt:      row.CreatedAt.Time,
+			}
+
+			// Parse nullable fields
+			if row.Temperature.Valid {
+				temp, _ := parseFloat32(row.Temperature.String)
+				config.Temperature = &temp
+			}
+			if row.MaxTokens.Valid {
+				config.MaxTokens = &row.MaxTokens.Int32
+			}
+			if row.TopP.Valid {
+				topP, _ := parseFloat32(row.TopP.String)
+				config.TopP = &topP
+			}
+			if row.TopK.Valid {
+				config.TopK = &row.TopK.Int32
+			}
+
+			// Parse JSON fields
+			if len(row.SafetySettings) > 0 {
+				var safetySettings map[string]interface{}
+				if err := json.Unmarshal(row.SafetySettings, &safetySettings); err == nil {
+					config.SafetySettings = safetySettings
+				}
+			}
+			if len(row.GenerationConfig) > 0 {
+				var generationConfig map[string]interface{}
+				if err := json.Unmarshal(row.GenerationConfig, &generationConfig); err == nil {
+					config.GenerationConfig = generationConfig
+				}
+			}
+			if len(row.Tools) > 0 {
+				var tools []types.Tool
+				if err := json.Unmarshal(row.Tools, &tools); err == nil {
+					config.Tools = tools
+				}
+			}
+
+			systemConfigs = append(systemConfigs, config)
+		}
+	}
+
+	log.Printf("✅ Retrieved %d system configurations from database", len(systemConfigs))
+	return systemConfigs, nil
 }
 
 // setExecutionContext sets the current execution context for logging

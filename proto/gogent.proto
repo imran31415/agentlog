@@ -1,0 +1,540 @@
+syntax = "proto3";
+
+package gogent;
+
+option go_package = "gogent/proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// =============================================================================
+// USER AUTHENTICATION & MANAGEMENT
+// =============================================================================
+
+// User represents a user in the system
+message User {
+  string id = 1;
+  string username = 2;
+  string email = 3;
+  bool email_verified = 4;
+  bool is_temporary = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  google.protobuf.Timestamp last_login_at = 8;
+}
+
+// Authentication request for login
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+// Authentication response with JWT token
+message LoginResponse {
+  string token = 1;
+  User user = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// Registration request
+message RegisterRequest {
+  string username = 1;
+  string email = 2;
+  string password = 3;
+}
+
+// Registration response
+message RegisterResponse {
+  User user = 1;
+  string token = 2;
+}
+
+// Create temporary user request
+message CreateTemporaryUserRequest {
+  string session_id = 1; // Optional session ID from frontend
+}
+
+// Create temporary user response
+message CreateTemporaryUserResponse {
+  User user = 1;
+  string temporary_password = 2;
+  string token = 3;
+}
+
+// Save temporary account request
+message SaveTemporaryAccountRequest {
+  string email = 1;
+  string current_password = 2;
+}
+
+// Save temporary account response
+message SaveTemporaryAccountResponse {
+  User user = 1;
+  bool email_sent = 2;
+}
+
+// Verify email request
+message VerifyEmailRequest {
+  string token = 1;
+}
+
+// Verify email response
+message VerifyEmailResponse {
+  User user = 1;
+  bool verified = 2;
+}
+
+// Get current user request
+message GetCurrentUserRequest {}
+
+// Get current user response
+message GetCurrentUserResponse {
+  User user = 1;
+}
+
+// =============================================================================
+// EXECUTION MANAGEMENT
+// =============================================================================
+
+// Multi-variation execution request
+message ExecuteRequest {
+  string execution_run_name = 1;
+  string description = 2;
+  string base_prompt = 3;
+  string context = 4;
+  bool enable_function_calling = 5;
+  repeated APIConfiguration configurations = 6;
+  repeated Tool function_tools = 7;
+  ComparisonConfig comparison_config = 8;
+  bool use_mock = 9;
+  string openweather_api_key = 10;
+  string neo4j_url = 11;
+  string neo4j_username = 12;
+  string neo4j_password = 13;
+  string neo4j_database = 14;
+}
+
+// Execute response with execution ID
+message ExecuteResponse {
+  string execution_id = 1;
+  string message = 2;
+  ExecutionRun execution_run = 3;
+}
+
+// Get execution status request
+message GetExecutionStatusRequest {
+  string execution_id = 1;
+}
+
+// Get execution status response
+message GetExecutionStatusResponse {
+  string status = 1; // pending, running, completed, failed
+  string error_message = 2;
+  google.protobuf.Timestamp start_time = 3;
+  google.protobuf.Timestamp end_time = 4;
+  ExecutionResult result = 5; // Only populated when completed
+}
+
+// Get execution result request
+message GetExecutionResultRequest {
+  string execution_run_id = 1;
+}
+
+// Get execution result response
+message GetExecutionResultResponse {
+  ExecutionResult result = 1;
+}
+
+// List execution runs request
+message ListExecutionRunsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+}
+
+// List execution runs response
+message ListExecutionRunsResponse {
+  repeated ExecutionRun execution_runs = 1;
+  int32 total_count = 2;
+}
+
+// Delete execution run request
+message DeleteExecutionRunRequest {
+  string execution_run_id = 1;
+}
+
+// Delete execution run response
+message DeleteExecutionRunResponse {
+  string message = 1;
+}
+
+// =============================================================================
+// CONFIGURATION MANAGEMENT
+// =============================================================================
+
+// List configurations request
+message ListConfigurationsRequest {}
+
+// List configurations response
+message ListConfigurationsResponse {
+  repeated APIConfiguration configurations = 1;
+}
+
+// Create configuration request
+message CreateConfigurationRequest {
+  APIConfiguration configuration = 1;
+}
+
+// Create configuration response
+message CreateConfigurationResponse {
+  APIConfiguration configuration = 1;
+}
+
+// Update configuration request
+message UpdateConfigurationRequest {
+  string id = 1;
+  APIConfiguration configuration = 2;
+}
+
+// Update configuration response
+message UpdateConfigurationResponse {
+  APIConfiguration configuration = 1;
+}
+
+// Delete configuration request
+message DeleteConfigurationRequest {
+  string id = 1;
+}
+
+// Delete configuration response
+message DeleteConfigurationResponse {
+  string message = 1;
+}
+
+// =============================================================================
+// FUNCTION MANAGEMENT
+// =============================================================================
+
+// List functions request
+message ListFunctionsRequest {}
+
+// List functions response
+message ListFunctionsResponse {
+  repeated FunctionDefinition functions = 1;
+}
+
+// Get function by ID request
+message GetFunctionRequest {
+  string id = 1;
+}
+
+// Get function by ID response
+message GetFunctionResponse {
+  FunctionDefinition function = 1;
+}
+
+// Create function request
+message CreateFunctionRequest {
+  FunctionDefinition function = 1;
+}
+
+// Create function response
+message CreateFunctionResponse {
+  FunctionDefinition function = 1;
+}
+
+// Update function request
+message UpdateFunctionRequest {
+  string id = 1;
+  FunctionDefinition function = 2;
+}
+
+// Update function response
+message UpdateFunctionResponse {
+  FunctionDefinition function = 1;
+}
+
+// Delete function request
+message DeleteFunctionRequest {
+  string id = 1;
+}
+
+// Delete function response
+message DeleteFunctionResponse {
+  string message = 1;
+}
+
+// Test function request
+message TestFunctionRequest {
+  string function_id = 1;
+  google.protobuf.Struct arguments = 2;
+  bool use_mock_data = 3;
+  int32 timeout_ms = 4;
+}
+
+// Test function response
+message TestFunctionResponse {
+  bool success = 1;
+  bool used_mock_data = 2;
+  int32 execution_time_ms = 3;
+  google.protobuf.Struct response = 4;
+  string error_message = 5;
+}
+
+// =============================================================================
+// DATABASE MANAGEMENT
+// =============================================================================
+
+// Get database stats request
+message GetDatabaseStatsRequest {}
+
+// Get database stats response
+message GetDatabaseStatsResponse {
+  int32 total_execution_runs = 1;
+  int32 total_api_requests = 2;
+  int32 total_api_responses = 3;
+  int32 total_function_calls = 4;
+  double avg_response_time = 5;
+  double success_rate = 6;
+}
+
+// List database tables request
+message ListDatabaseTablesRequest {}
+
+// List database tables response
+message ListDatabaseTablesResponse {
+  repeated string tables = 1;
+}
+
+// Get table data request
+message GetTableDataRequest {
+  string table_name = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+// Get table data response
+message GetTableDataResponse {
+  string table_name = 1;
+  repeated string columns = 2;
+  repeated google.protobuf.ListValue rows = 3;
+  int32 total_rows = 4;
+}
+
+// =============================================================================
+// HEALTH & SYSTEM
+// =============================================================================
+
+// Health check request
+message HealthRequest {}
+
+// Health check response
+message HealthResponse {
+  string status = 1;
+  string version = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  bool database = 4;
+  bool gemini_api = 5;
+}
+
+// =============================================================================
+// DATA TYPES
+// =============================================================================
+
+// Execution run represents a group of related API calls
+message ExecutionRun {
+  string id = 1;
+  string user_id = 2;
+  string name = 3;
+  string description = 4;
+  bool enable_function_calling = 5;
+  string status = 6; // pending, running, completed, failed
+  string error_message = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// API configuration for multi-variation execution
+message APIConfiguration {
+  string id = 1;
+  string execution_run_id = 2;
+  string variation_name = 3;
+  string model_name = 4;
+  string system_prompt = 5;
+  float temperature = 6;
+  int32 max_tokens = 7;
+  float top_p = 8;
+  int32 top_k = 9;
+  google.protobuf.Struct safety_settings = 10;
+  google.protobuf.Struct generation_config = 11;
+  repeated Tool tools = 12;
+  google.protobuf.Struct tool_config = 13;
+  google.protobuf.Timestamp created_at = 14;
+}
+
+// Tool definition for function calling
+message Tool {
+  string name = 1;
+  string description = 2;
+  google.protobuf.Struct parameters = 3;
+}
+
+// Function definition
+message FunctionDefinition {
+  string id = 1;
+  string user_id = 2;
+  string name = 3;
+  string display_name = 4;
+  string description = 5;
+  google.protobuf.Struct parameters_schema = 6;
+  google.protobuf.Struct mock_response = 7;
+  string endpoint_url = 8;
+  string http_method = 9;
+  google.protobuf.Struct headers = 10;
+  google.protobuf.Struct auth_config = 11;
+  bool is_active = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+// API request
+message APIRequest {
+  string id = 1;
+  string execution_run_id = 2;
+  string configuration_id = 3;
+  string request_type = 4; // generate, chat, function_call
+  string prompt = 5;
+  string context = 6;
+  string function_name = 7;
+  google.protobuf.Struct function_parameters = 8;
+  google.protobuf.Struct request_headers = 9;
+  google.protobuf.Struct request_body = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+// API response
+message APIResponse {
+  string id = 1;
+  string request_id = 2;
+  string response_status = 3; // success, error, timeout
+  string response_text = 4;
+  google.protobuf.Struct function_call_response = 5;
+  google.protobuf.Struct usage_metadata = 6;
+  google.protobuf.Struct safety_ratings = 7;
+  string finish_reason = 8;
+  string error_message = 9;
+  int32 response_time_ms = 10;
+  google.protobuf.Struct response_headers = 11;
+  google.protobuf.Struct response_body = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+// Function call
+message FunctionCall {
+  string id = 1;
+  string request_id = 2;
+  string function_name = 3;
+  google.protobuf.Struct function_arguments = 4;
+  google.protobuf.Struct function_response = 5;
+  string execution_status = 6; // pending, success, error
+  int32 execution_time_ms = 7;
+  string error_details = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+// Execution result
+message ExecutionResult {
+  ExecutionRun execution_run = 1;
+  repeated VariationResult results = 2;
+  ComparisonResult comparison = 3;
+  int64 total_time = 4; // milliseconds
+  int32 success_count = 5;
+  int32 error_count = 6;
+  repeated ExecutionLog logs = 7;
+}
+
+// Variation result
+message VariationResult {
+  APIConfiguration configuration = 1;
+  APIRequest request = 2;
+  APIResponse response = 3;
+  repeated FunctionCall function_calls = 4;
+  int64 execution_time = 5; // milliseconds
+}
+
+// Comparison result
+message ComparisonResult {
+  string id = 1;
+  string execution_run_id = 2;
+  string comparison_type = 3;
+  string metric_name = 4;
+  google.protobuf.Struct configuration_scores = 5;
+  string best_configuration_id = 6;
+  APIConfiguration best_configuration = 7;
+  repeated APIConfiguration all_configurations = 8;
+  string analysis_notes = 9;
+  google.protobuf.Timestamp created_at = 10;
+}
+
+// Execution log
+message ExecutionLog {
+  string id = 1;
+  string execution_run_id = 2;
+  string configuration_id = 3;
+  string request_id = 4;
+  string log_level = 5; // INFO, DEBUG, WARN, ERROR, SUCCESS
+  string log_category = 6; // SETUP, EXECUTION, FUNCTION_CALL, API_CALL, COMPLETION, ERROR
+  string message = 7;
+  google.protobuf.Struct details = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+// Comparison config
+message ComparisonConfig {
+  bool enabled = 1;
+  repeated string metrics = 2;
+  repeated string custom_rules = 3;
+}
+
+// =============================================================================
+// GRPC SERVICE DEFINITIONS
+// =============================================================================
+
+// Main gogent service
+service GogentService {
+  // Authentication & User Management
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc CreateTemporaryUser(CreateTemporaryUserRequest) returns (CreateTemporaryUserResponse);
+  rpc SaveTemporaryAccount(SaveTemporaryAccountRequest) returns (SaveTemporaryAccountResponse);
+  rpc VerifyEmail(VerifyEmailRequest) returns (VerifyEmailResponse);
+  rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
+
+  // Execution Management
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+  rpc GetExecutionStatus(GetExecutionStatusRequest) returns (GetExecutionStatusResponse);
+  rpc GetExecutionResult(GetExecutionResultRequest) returns (GetExecutionResultResponse);
+  rpc ListExecutionRuns(ListExecutionRunsRequest) returns (ListExecutionRunsResponse);
+  rpc DeleteExecutionRun(DeleteExecutionRunRequest) returns (DeleteExecutionRunResponse);
+
+  // Configuration Management
+  rpc ListConfigurations(ListConfigurationsRequest) returns (ListConfigurationsResponse);
+  rpc CreateConfiguration(CreateConfigurationRequest) returns (CreateConfigurationResponse);
+  rpc UpdateConfiguration(UpdateConfigurationRequest) returns (UpdateConfigurationResponse);
+  rpc DeleteConfiguration(DeleteConfigurationRequest) returns (DeleteConfigurationResponse);
+
+  // Function Management
+  rpc ListFunctions(ListFunctionsRequest) returns (ListFunctionsResponse);
+  rpc GetFunction(GetFunctionRequest) returns (GetFunctionResponse);
+  rpc CreateFunction(CreateFunctionRequest) returns (CreateFunctionResponse);
+  rpc UpdateFunction(UpdateFunctionRequest) returns (UpdateFunctionResponse);
+  rpc DeleteFunction(DeleteFunctionRequest) returns (DeleteFunctionResponse);
+  rpc TestFunction(TestFunctionRequest) returns (TestFunctionResponse);
+
+  // Database Management
+  rpc GetDatabaseStats(GetDatabaseStatsRequest) returns (GetDatabaseStatsResponse);
+  rpc ListDatabaseTables(ListDatabaseTablesRequest) returns (ListDatabaseTablesResponse);
+  rpc GetTableData(GetTableDataRequest) returns (GetTableDataResponse);
+
+  // Health & System
+  rpc Health(HealthRequest) returns (HealthResponse);
+} 

@@ -3,6 +3,27 @@
 CREATE DATABASE IF NOT EXISTS gogent;
 USE gogent;
 
+-- Users table for authentication
+CREATE TABLE users (
+    id VARCHAR(36) PRIMARY KEY,
+    username VARCHAR(255) NOT NULL UNIQUE,
+    email VARCHAR(255) UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    email_verified BOOLEAN DEFAULT FALSE,
+    is_temporary BOOLEAN DEFAULT FALSE,
+    email_verification_token VARCHAR(255),
+    email_verification_expires_at TIMESTAMP NULL,
+    password_reset_token VARCHAR(255),
+    password_reset_expires_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    last_login_at TIMESTAMP NULL,
+    INDEX idx_username (username),
+    INDEX idx_email (email),
+    INDEX idx_temporary (is_temporary),
+    INDEX idx_created_at (created_at)
+);
+
 -- Function definitions for reusable tools
 CREATE TABLE function_definitions (
     id VARCHAR(36) PRIMARY KEY,
@@ -41,14 +62,20 @@ CREATE TABLE execution_function_configs (
 -- Execution runs for grouping related API calls and variations
 CREATE TABLE execution_runs (
     id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL DEFAULT 'temp-user',
     name VARCHAR(255) NOT NULL,
     description TEXT,
-    enable_function_calling BOOLEAN NOT NULL DEFAULT FALSE,
+    base_prompt TEXT,
+    context_prompt TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    enable_function_calling BOOLEAN NOT NULL DEFAULT FALSE,
+    status ENUM('pending', 'running', 'completed', 'failed') DEFAULT 'pending',
+    error_message TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     INDEX idx_created_at (created_at),
     INDEX idx_name (name),
-    INDEX idx_function_calling (enable_function_calling)
+    INDEX idx_user_id (user_id)
 );
 
 -- Execution logs for storing detailed execution information
@@ -76,6 +103,7 @@ CREATE TABLE execution_logs (
 -- API call configurations for multi-variation execution
 CREATE TABLE api_configurations (
     id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL DEFAULT 'temp-user',
     execution_run_id VARCHAR(36) NOT NULL,
     variation_name VARCHAR(255) NOT NULL,
     model_name VARCHAR(255) NOT NULL,
@@ -90,9 +118,11 @@ CREATE TABLE api_configurations (
     tool_config JSON,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (execution_run_id) REFERENCES execution_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     INDEX idx_execution_run (execution_run_id),
     INDEX idx_variation (variation_name),
-    INDEX idx_model (model_name)
+    INDEX idx_model (model_name),
+    INDEX idx_user_id (user_id)
 );
 
 -- API requests
