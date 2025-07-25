@@ -1,0 +1,88 @@
+2025/07/24 17:11:43 Go SDK disabled - using REST API for all Gemini calls
+🚀 GoGent HTTP Server starting on port 8080
+📡 Health check: http://localhost:8080/health
+🔧 API endpoints:
+   POST /api/execute - Multi-variation execution
+   GET  /api/execution-runs - Execution history
+   GET  /api/functions - List function definitions
+   POST /api/functions - Create function definition
+   GET  /api/functions/{id} - Get function by ID
+   PUT  /api/functions/{id} - Update function
+   DELETE /api/functions/{id} - Delete function
+   POST /api/functions/test/{id} - Test function execution
+   GET  /api/database/stats - Database statistics
+   GET  /api/database/tables - Database tables
+💡 Use X-Use-Mock: true header for mock responses
+🔑 Set GEMINI_API_KEY in config.env for real API calls
+
+2025/07/24 17:11:59 🔍 DEBUG - Parsed request:
+2025/07/24 17:11:59   ExecutionRunName: 'debug-detailed-logs'
+2025/07/24 17:11:59   BasePrompt: 'What is the weather in Los Angeles?'
+2025/07/24 17:11:59   Description: ''
+2025/07/24 17:11:59   Configurations count: 1
+2025/07/24 17:11:59   First config - ModelName: 'gemini-1.5-flash', VariationName: 'test'
+2025/07/24 17:11:59 Execute handler - API key from header: none, server key: AIzaSyCQ1w...
+2025/07/24 17:11:59 Creating temporary client with API key: AIzaSyCQ1w...
+2025/07/24 17:11:59 Go SDK disabled - using REST API for all Gemini calls
+2025/07/24 17:11:59 Using temporary client for real API execution
+2025/07/24 17:11:59 🔍 ExecuteMultiVariation - EnableFunctionCalling: true
+2025/07/24 17:11:59 🔍 Function tools provided: 1
+2025/07/24 17:11:59 🔧 Function tool 1: name=get_weather, description=Get weather information for a specific location
+2025/07/24 17:11:59 🔧 Creating execution run with enableFunctionCalling: true
+2025/07/24 17:11:59 🔧 Adding 1 function tools to configuration: test
+2025/07/24 17:11:59 Using REST API for model: gemini-1.5-flash with API key: AIzaSyCQ1w...
+
+🚀 USING REST API IMPLEMENTATION - Model: 'gemini-1.5-flash'
+2025/07/24 17:11:59 🚀 REST API CALLED - Model: 'gemini-1.5-flash', API Key: AIzaSyCQ1w...
+2025/07/24 17:11:59 ✅ Using API key: AIzaSyCQ1w... for model: 'gemini-1.5-flash'
+2025/07/24 17:11:59 REST API - Final prompt: What is the weather in Los Angeles?
+2025/07/24 17:11:59 🔧 Adding 1 tools to Gemini request
+2025/07/24 17:11:59 🔧 Tool 1: get_weather - Get weather information for a specific location
+2025/07/24 17:11:59 🔧 Tool declaration: map[functionDeclarations:[map[description:Get weather information for a specific location name:get_weather parameters:map[properties:map[location:map[description:The city name type:string]] required:[location] type:object]]]]
+2025/07/24 17:11:59 🔧 Final tools in request body: [map[functionDeclarations:[map[description:Get weather information for a specific location name:get_weather parameters:map[properties:map[location:map[description:The city name type:string]] required:[location] type:object]]]]]
+2025/07/24 17:11:59 🔧 Complete Gemini API request body: {"contents":[{"parts":[{"text":"What is the weather in Los Angeles?"}]}],"generationConfig":{"temperature":0.7},"tools":[{"functionDeclarations":[{"description":"Get weather information for a specific location","name":"get_weather","parameters":{"properties":{"location":{"description":"The city name","type":"string"}},"required":["location"],"type":"object"}}]}]}
+2025/07/24 17:11:59 REST API - URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent
+2025/07/24 17:12:00 🔧 Complete Gemini API response: {
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "The available tools lack the necessary functionality to answer this question.  The `get_weather` function is defined but does not have an implementation.\n"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "avgLogprobs": -0.083180085817972815
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 25,
+    "candidatesTokenCount": 30,
+    "totalTokenCount": 55,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 25
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 30
+      }
+    ]
+  },
+  "modelVersion": "gemini-1.5-flash",
+  "responseId": "z8uCaLuFOuKo2PgPm__i-AU"
+}
+2025/07/24 17:12:00 🔧 Parsed response - 1 candidates
+2025/07/24 17:12:00 🔧 Candidate finish reason: STOP
+2025/07/24 17:12:00 🔧 Candidate has 1 parts
+2025/07/24 17:12:00 🔧 Part 0 - Text: "The available tools lack the necessary functionality to answer this question.  The `get_weather` function is defined but does not have an implementation.\n", FunctionCall.Name: ""
+2025/07/24 17:12:00 REST API - Success! Response text: The available tools lack the necessary functionali
+🔍 Starting comparison analysis for execution run: 4e0b20fb-cf84-4298-9519-1e085f221cc1
+🔍 Comparing 1 results for execution run: 4e0b20fb-cf84-4298-9519-1e085f221cc1
+✅ Comparison completed successfully: 75d2612f-b0a2-460a-a898-052b00d90a82
+💾 Comparison result stored in database: 75d2612f-b0a2-460a-a898-052b00d90a82
