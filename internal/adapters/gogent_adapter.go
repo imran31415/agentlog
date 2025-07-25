@@ -77,8 +77,7 @@ func (adapter *GoGentClientAdapter) LogAPIResponse(ctx context.Context, response
 }
 
 func (adapter *GoGentClientAdapter) LogFunctionCall(ctx context.Context, call *types.FunctionCall) error {
-	// TODO: Implement function call logging in the underlying client
-	return fmt.Errorf("function call logging not yet implemented")
+	return adapter.client.LogFunctionCall(ctx, call)
 }
 
 func (adapter *GoGentClientAdapter) GetExecutionRun(ctx context.Context, id string) (*types.ExecutionRun, error) {

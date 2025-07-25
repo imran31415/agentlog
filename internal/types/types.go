@@ -224,10 +224,15 @@ type FunctionCall struct {
 type GeminiClientConfig struct {
 	APIKey            string `json:"api_key"`
 	OpenWeatherAPIKey string `json:"openweather_api_key,omitempty"`
-	ProjectID         string `json:"project_id,omitempty"`
-	Region            string `json:"region,omitempty"`
-	MaxRetries        int    `json:"max_retries"`
-	TimeoutSecs       int    `json:"timeout_secs"`
+	// Neo4j configuration
+	Neo4jURL      string `json:"neo4j_url,omitempty"`
+	Neo4jUsername string `json:"neo4j_username,omitempty"`
+	Neo4jPassword string `json:"neo4j_password,omitempty"`
+	Neo4jDatabase string `json:"neo4j_database,omitempty"`
+	ProjectID     string `json:"project_id,omitempty"`
+	Region        string `json:"region,omitempty"`
+	MaxRetries    int    `json:"max_retries"`
+	TimeoutSecs   int    `json:"timeout_secs"`
 }
 
 // MultiExecutionRequest represents a request to execute multiple variations

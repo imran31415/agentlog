@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -172,6 +173,23 @@ func (s *Server) runAsyncExecution(executionID string, request *types.MultiExecu
 		log.Printf("⚠️ No OpenWeather API key provided in headers")
 	}
 
+	// Get Neo4j configuration from headers
+	neo4jURL := headers.Get("X-Neo4j-URL")
+	neo4jUsername := headers.Get("X-Neo4j-Username")
+	neo4jPassword := headers.Get("X-Neo4j-Password")
+	neo4jDatabase := headers.Get("X-Neo4j-Database")
+	if neo4jURL != "" {
+		log.Printf("🔗 Using Neo4j URL from frontend: %s", neo4jURL)
+		if neo4jUsername != "" {
+			log.Printf("👤 Neo4j username: %s", neo4jUsername)
+		}
+		if neo4jDatabase != "" {
+			log.Printf("🗂️ Neo4j database: %s", neo4jDatabase)
+		}
+	} else {
+		log.Printf("⚠️ No Neo4j configuration provided in headers")
+	}
+
 	ctx := context.Background()
 	var err error
 	var result *types.ExecutionResult
@@ -181,6 +199,10 @@ func (s *Server) runAsyncExecution(executionID string, request *types.MultiExecu
 		tempConfig := &types.GeminiClientConfig{
 			APIKey:            "", // Empty to force mock
 			OpenWeatherAPIKey: openWeatherAPIKey,
+			Neo4jURL:          neo4jURL,
+			Neo4jUsername:     neo4jUsername,
+			Neo4jPassword:     neo4jPassword,
+			Neo4jDatabase:     neo4jDatabase,
 			MaxRetries:        s.config.MaxRetries,
 			TimeoutSecs:       s.config.TimeoutSecs,
 		}
@@ -209,6 +231,10 @@ func (s *Server) runAsyncExecution(executionID string, request *types.MultiExecu
 		tempConfig := &types.GeminiClientConfig{
 			APIKey:            apiKey,
 			OpenWeatherAPIKey: openWeatherAPIKey,
+			Neo4jURL:          neo4jURL,
+			Neo4jUsername:     neo4jUsername,
+			Neo4jPassword:     neo4jPassword,
+			Neo4jDatabase:     neo4jDatabase,
 			MaxRetries:        s.config.MaxRetries,
 			TimeoutSecs:       s.config.TimeoutSecs,
 		}
@@ -833,6 +859,91 @@ func (s *Server) databaseTableDataHandler(w http.ResponseWriter, r *http.Request
 				"totalRows": len(rows),
 			}
 
+		case "function_calls":
+			// Query function calls directly from database
+			query := `
+				SELECT fc.id, fc.request_id, fc.function_name, fc.function_arguments, 
+				       fc.function_response, fc.execution_status, fc.execution_time_ms, 
+				       fc.error_details, fc.created_at
+				FROM function_calls fc 
+				ORDER BY fc.created_at DESC 
+				LIMIT ?
+			`
+
+			dbRows, err := s.client.GetDB().QueryContext(context.Background(), query, limit)
+			if err != nil {
+				log.Printf("Error querying function_calls: %v", err)
+				http.Error(w, "Database query failed", http.StatusInternalServerError)
+				return
+			}
+			defer dbRows.Close()
+
+			var rows [][]interface{}
+			for dbRows.Next() {
+				var id, requestID, functionName, executionStatus string
+				var errorDetails sql.NullString
+				var functionArgs, functionResponse []byte
+				var executionTimeMs sql.NullInt32
+				var createdAt time.Time
+
+				err := dbRows.Scan(&id, &requestID, &functionName, &functionArgs,
+					&functionResponse, &executionStatus, &executionTimeMs, &errorDetails, &createdAt)
+				if err != nil {
+					log.Printf("Error scanning function_calls row: %v", err)
+					continue
+				}
+
+				// Convert execution time to display format
+				var execTimeStr string
+				if executionTimeMs.Valid {
+					execTimeStr = fmt.Sprintf("%d ms", executionTimeMs.Int32)
+				} else {
+					execTimeStr = ""
+				}
+
+				// Convert error details to display format
+				var errorDetailsStr string
+				if errorDetails.Valid {
+					errorDetailsStr = errorDetails.String
+				} else {
+					errorDetailsStr = ""
+				}
+
+				// Truncate long JSON for display
+				argsStr := string(functionArgs)
+				if len(argsStr) > 100 {
+					argsStr = argsStr[:100] + "..."
+				}
+				responseStr := string(functionResponse)
+				if len(responseStr) > 100 {
+					responseStr = responseStr[:100] + "..."
+				}
+
+				row := []interface{}{
+					id,
+					requestID,
+					functionName,
+					argsStr,
+					responseStr,
+					executionStatus,
+					execTimeStr,
+					errorDetailsStr,
+					createdAt.Format(time.RFC3339),
+				}
+				rows = append(rows, row)
+			}
+
+			tableData = map[string]interface{}{
+				"tableName": "function_calls",
+				"columns": []string{
+					"id", "request_id", "function_name", "function_arguments",
+					"function_response", "execution_status", "execution_time_ms",
+					"error_details", "created_at",
+				},
+				"rows":      rows,
+				"totalRows": len(rows),
+			}
+
 		default:
 			// For other tables, return a placeholder
 			tableData = map[string]interface{}{
@@ -904,6 +1015,13 @@ func (s *Server) databaseTablesHandler(w http.ResponseWriter, r *http.Request) {
 	tables := []string{
 		"execution_runs",
 		"comparison_results",
+		"function_calls",
+		"api_configurations",
+		"api_requests",
+		"api_responses",
+		"execution_logs",
+		"function_definitions",
+		"execution_function_configs",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -915,7 +1033,7 @@ func (s *Server) enableCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Gemini-API-Key, X-OpenWeather-API-Key, X-Use-Mock")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Gemini-API-Key, X-OpenWeather-API-Key, X-Neo4j-URL, X-Neo4j-Username, X-Neo4j-Password, X-Neo4j-Database, X-Use-Mock")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -1145,11 +1263,11 @@ func (s *Server) listFunctions(w http.ResponseWriter, r *http.Request) {
 
 	// Query the database directly for function definitions
 	query := `
-		SELECT id, name, display_name, description, parameters_schema, 
-		       mock_response, endpoint_url, http_method, headers, auth_config, 
+		SELECT id, name, display_name, description, parameters_schema,
+		       mock_response, endpoint_url, http_method, headers, auth_config,
 		       is_active, created_at, updated_at
-		FROM function_definitions 
-		WHERE is_active = true 
+		FROM function_definitions
+		WHERE is_active = true
 		ORDER BY display_name ASC
 	`
 
@@ -1165,7 +1283,9 @@ func (s *Server) listFunctions(w http.ResponseWriter, r *http.Request) {
 
 	for rows.Next() {
 		var function types.FunctionDefinition
-		var parametersSchemaJSON, mockResponseJSON, headersJSON, authConfigJSON string
+		var parametersSchemaJSON string
+		var mockResponseJSON, headersJSON, authConfigJSON sql.NullString
+		var endpointURL sql.NullString
 
 		err := rows.Scan(
 			&function.ID,
@@ -1174,7 +1294,7 @@ func (s *Server) listFunctions(w http.ResponseWriter, r *http.Request) {
 			&function.Description,
 			&parametersSchemaJSON,
 			&mockResponseJSON,
-			&function.EndpointURL,
+			&endpointURL,
 			&function.HttpMethod,
 			&headersJSON,
 			&authConfigJSON,
@@ -1187,6 +1307,11 @@ func (s *Server) listFunctions(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Set endpoint URL
+		if endpointURL.Valid {
+			function.EndpointURL = endpointURL.String
+		}
+
 		// Parse JSON fields
 		if parametersSchemaJSON != "" {
 			if err := json.Unmarshal([]byte(parametersSchemaJSON), &function.ParametersSchema); err != nil {
@@ -1195,20 +1320,20 @@ func (s *Server) listFunctions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if mockResponseJSON != "" {
-			if err := json.Unmarshal([]byte(mockResponseJSON), &function.MockResponse); err != nil {
+		if mockResponseJSON.Valid && mockResponseJSON.String != "" {
+			if err := json.Unmarshal([]byte(mockResponseJSON.String), &function.MockResponse); err != nil {
 				log.Printf("⚠️ Failed to parse mock response for %s: %v", function.Name, err)
 			}
 		}
 
-		if headersJSON != "" && headersJSON != "null" {
-			if err := json.Unmarshal([]byte(headersJSON), &function.Headers); err != nil {
+		if headersJSON.Valid && headersJSON.String != "" && headersJSON.String != "null" {
+			if err := json.Unmarshal([]byte(headersJSON.String), &function.Headers); err != nil {
 				log.Printf("⚠️ Failed to parse headers for %s: %v", function.Name, err)
 			}
 		}
 
-		if authConfigJSON != "" && authConfigJSON != "null" {
-			if err := json.Unmarshal([]byte(authConfigJSON), &function.AuthConfig); err != nil {
+		if authConfigJSON.Valid && authConfigJSON.String != "" && authConfigJSON.String != "null" {
+			if err := json.Unmarshal([]byte(authConfigJSON.String), &function.AuthConfig); err != nil {
 				log.Printf("⚠️ Failed to parse auth config for %s: %v", function.Name, err)
 			}
 		}

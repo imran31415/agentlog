@@ -2,6 +2,78 @@
 
 GoGent is a comprehensive Go platform that wraps AI APIs (starting with Google Gemini) with advanced multi-variation execution, database logging, and use case-specific implementations. It enables you to run the same AI prompt with different configurations, compare results, and implement domain-specific AI solutions like procurement management, legal analysis, and more.
 
+## 🚀 Quick Start
+
+Get AgentLog running in 2 simple steps:
+
+### 1. Start the Backend Server
+```bash
+make run-server
+```
+This starts the GoGent backend on `localhost:8080` with REST API endpoints for multi-variation AI execution, function calling, and database logging.
+
+*[Screenshot: Backend server startup logs showing available endpoints]*
+
+### 2. Start the Frontend App
+```bash
+make frontend-start
+```
+This launches the React Native development server with the mobile interface for configuring AI models, executing prompts, and viewing results.
+
+*[Screenshot: Frontend mobile app showing configuration screen]*
+
+### That's it! 
+You now have a complete AI experimentation platform running locally. The frontend will connect to the backend automatically.
+
+*[Screenshot: Mobile app executing AI prompts with multiple configurations]*
+*[Screenshot: Results comparison view showing different AI model outputs]*
+
+## 📋 Overview
+
+### The Problem
+When building AI agents with Gemini (or any LLM), you need **visibility and control** for effective debugging and optimization. Most implementations lack:
+
+1. **Traceability & Monitoring** - No comprehensive logging of AI interactions
+2. **Configuration Flexibility** - Can't easily adjust temperature, tokens, system prompts
+3. **Parallel Testing** - No way to run multiple model variations simultaneously  
+4. **Centralized Management** - No unified platform to track and compare executions
+
+### The Solution: AgentLog Platform
+
+AgentLog is a **centralized AI experimentation platform** that gives you complete control over your Gemini agents:
+
+#### 🔧 **Complete Configuration Control**
+- Configure Gemini API keys and any custom function API keys
+- Adjust model parameters: temperature, max tokens, top-P, top-K
+- Customize system prompts and context for different use cases
+- Set up parallel executions with variation testing
+
+#### 📊 **Advanced Execution & Tracking**  
+- Run multiple AI model configurations simultaneously
+- Compare results side-by-side with intelligent analysis
+- Complete database logging of every API call and response
+- Track function calls, execution times, and model performance
+
+#### 🛠️ **Extensible Function System**
+- Add custom functions for external API integrations
+- Built-in support for weather APIs, Neo4j graph databases
+- Create domain-specific AI workflows (procurement, legal analysis, etc.)
+- Function call tracing and debugging capabilities
+
+#### 📱 **Professional Frontend Interface**
+- React Native mobile app for complete platform management
+- Real-time execution monitoring with loading states
+- Historical analysis with searchable execution logs
+- Database inspection tools for deep debugging
+
+#### 🏢 **Enterprise-Ready Features**
+- MySQL database with comprehensive audit trails
+- RESTful API architecture for integration
+- Scalable multi-variation execution engine
+- Production deployment capabilities
+
+**Result**: Instead of blind AI development, you get a **professional-grade platform** with all the tools needed to build, test, and optimize intelligent agents with complete visibility into their behavior.
+
 ## 🌟 Key Features
 
 ### Core Platform
@@ -46,45 +118,6 @@ GoGent Platform
 ├── 🗄️ Database Layer (MySQL + sqlc)
 ├── 🔧 Core Client (AI API Wrapper)
 └── 📊 Analytics & Comparison Engine
-```
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Go 1.21+
-- MySQL 8.0+
-- Google Gemini API key
-
-### Installation
-
-1. Clone and set up:
-```bash
-git clone <repository-url>
-cd gogent
-make dev-setup
-```
-
-2. Configure environment:
-```bash
-cp config.example.env config.env
-# Edit config.env with your database and API credentials
-```
-
-3. Initialize database:
-```bash
-make init-db
-```
-
-4. Test different modes:
-```bash
-# Start HTTP server for frontend integration (persistent)
-make run-api
-
-# One-time demos:
-make run-simple      # Mock demo (no external dependencies)
-make run-simple-api  # Real API without database
-make run-api-demo    # Real API + database demo (one-time)
 ```
 
 ## 🌐 HTTP Server Mode

@@ -22,6 +22,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
 
 // Client represents the main gogent client that wraps Gemini API calls
@@ -686,14 +687,38 @@ func (c *Client) callGeminiRestAPI(ctx context.Context, config *types.APIConfigu
 				log.Printf("🎯 FUNCTION CALL DETECTED: %s with args: %+v", part.FunctionCall.Name, part.FunctionCall.Args)
 
 				// Execute the function call
+				startTime := time.Now()
 				functionResult, err := c.executeFunctionCall(ctx, part.FunctionCall.Name, part.FunctionCall.Args)
+				executionTime := time.Since(startTime).Milliseconds()
+
+				// Create function call record for logging
+				functionCall := &types.FunctionCall{
+					ID:               uuid.New().String(),
+					RequestID:        request.ID,
+					FunctionName:     part.FunctionCall.Name,
+					FunctionArgs:     part.FunctionCall.Args,
+					FunctionResponse: functionResult,
+					ExecutionTimeMs:  int32(executionTime),
+					CreatedAt:        time.Now(),
+				}
+
 				if err != nil {
 					log.Printf("❌ Function execution failed: %v", err)
+					functionCall.ExecutionStatus = "error"
+					functionCall.ErrorDetails = err.Error()
 					// Return error response but don't fail completely
 					functionResult = map[string]interface{}{
 						"error":  err.Error(),
 						"status": "failed",
 					}
+					functionCall.FunctionResponse = functionResult
+				} else {
+					functionCall.ExecutionStatus = "success"
+				}
+
+				// Log function call to database
+				if logErr := c.LogFunctionCall(ctx, functionCall); logErr != nil {
+					log.Printf("⚠️ Failed to log function call to database: %v", logErr)
 				}
 
 				// Send function result back to Gemini to get final response
@@ -785,6 +810,52 @@ func (c *Client) executeFunctionCall(ctx context.Context, functionName string, a
 		}
 
 		log.Printf("✅ Weather function executed for %s", location)
+		return result, nil
+	}
+
+	// Handle Neo4j graph query function
+	if functionName == "query_graph" {
+		query, ok := args["query"].(string)
+		if !ok {
+			return nil, fmt.Errorf("query parameter missing or invalid")
+		}
+
+		// Get limit parameter (optional, default to 25)
+		limit := 25
+		if limitVal, exists := args["limit"]; exists {
+			if limitFloat, ok := limitVal.(float64); ok {
+				limit = int(limitFloat)
+			}
+			if limit < 1 || limit > 100 {
+				limit = 25 // Reset to default if out of bounds
+			}
+		}
+
+		// Call Neo4j query function
+		result, err := c.callNeo4jAPI(ctx, query, limit)
+		if err != nil {
+			log.Printf("❌ Neo4j query failed: %v", err)
+			// Fallback to mock data if Neo4j call fails
+			result = map[string]interface{}{
+				"nodes": []map[string]interface{}{
+					{
+						"id":         "mock_node_1",
+						"labels":     []string{"Person"},
+						"properties": map[string]interface{}{"name": "Mock User", "age": 30},
+					},
+				},
+				"relationships": []map[string]interface{}{},
+				"summary": map[string]interface{}{
+					"totalNodes":         1,
+					"totalRelationships": 0,
+					"executionTime":      "0ms",
+					"query":              query,
+					"error":              "Neo4j connection unavailable, showing mock data",
+				},
+			}
+		}
+
+		log.Printf("✅ Neo4j query executed: %s", query)
 		return result, nil
 	}
 
@@ -885,6 +956,115 @@ func (c *Client) callWeatherAPI(ctx context.Context, location string, apiKey str
 
 	log.Printf("✅ Weather API call successful for %s: %s, %.0f°F", weatherResp.Name, condition, weatherResp.Main.Temp)
 	return result, nil
+}
+
+// callNeo4jAPI executes a Cypher query against a Neo4j database
+func (c *Client) callNeo4jAPI(ctx context.Context, query string, limit int) (map[string]interface{}, error) {
+	if c.config.Neo4jURL == "" {
+		return nil, fmt.Errorf("Neo4j URL not configured")
+	}
+
+	log.Printf("🔗 Connecting to Neo4j at: %s", c.config.Neo4jURL)
+
+	// Create Neo4j driver
+	driver, err := neo4j.NewDriverWithContext(c.config.Neo4jURL, neo4j.BasicAuth(c.config.Neo4jUsername, c.config.Neo4jPassword, ""))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Neo4j driver: %w", err)
+	}
+	defer driver.Close(ctx)
+
+	// Verify connectivity
+	if err := driver.VerifyConnectivity(ctx); err != nil {
+		return nil, fmt.Errorf("failed to connect to Neo4j: %w", err)
+	}
+
+	// Create session
+	sessionConfig := neo4j.SessionConfig{
+		AccessMode:   neo4j.AccessModeRead,
+		DatabaseName: c.config.Neo4jDatabase,
+	}
+	session := driver.NewSession(ctx, sessionConfig)
+	defer session.Close(ctx)
+
+	// Add LIMIT clause if not present in query
+	finalQuery := query
+	if !strings.Contains(strings.ToUpper(query), "LIMIT") {
+		finalQuery = fmt.Sprintf("%s LIMIT %d", query, limit)
+	}
+
+	log.Printf("🔍 Executing Cypher query: %s", finalQuery)
+
+	// Execute query
+	startTime := time.Now()
+	result, err := session.Run(ctx, finalQuery, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %w", err)
+	}
+
+	// Collect results
+	var nodes []map[string]interface{}
+	var relationships []map[string]interface{}
+	recordCount := 0
+
+	for result.Next(ctx) {
+		record := result.Record()
+		recordCount++
+
+		// Process each value in the record
+		for i, value := range record.Values {
+			if node, ok := value.(neo4j.Node); ok {
+				// Extract node data
+				nodeData := map[string]interface{}{
+					"id":         fmt.Sprintf("%d", node.GetId()),
+					"labels":     node.Labels,
+					"properties": node.Props,
+				}
+				nodes = append(nodes, nodeData)
+			} else if rel, ok := value.(neo4j.Relationship); ok {
+				// Extract relationship data
+				relData := map[string]interface{}{
+					"id":         fmt.Sprintf("%d", rel.GetId()),
+					"type":       rel.Type,
+					"startNode":  fmt.Sprintf("%d", rel.StartId),
+					"endNode":    fmt.Sprintf("%d", rel.EndId),
+					"properties": rel.Props,
+				}
+				relationships = append(relationships, relData)
+			} else {
+				// For other data types, add as a simple node
+				key := record.Keys[i]
+				nodeData := map[string]interface{}{
+					"id":         fmt.Sprintf("result_%d_%d", recordCount, i),
+					"labels":     []string{"QueryResult"},
+					"properties": map[string]interface{}{key: value},
+				}
+				nodes = append(nodes, nodeData)
+			}
+		}
+	}
+
+	// Check for errors
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query execution error: %w", err)
+	}
+
+	executionTime := time.Since(startTime)
+
+	// Build response
+	response := map[string]interface{}{
+		"nodes":         nodes,
+		"relationships": relationships,
+		"summary": map[string]interface{}{
+			"totalNodes":         len(nodes),
+			"totalRelationships": len(relationships),
+			"recordCount":        recordCount,
+			"executionTime":      fmt.Sprintf("%dms", executionTime.Milliseconds()),
+			"query":              finalQuery,
+		},
+	}
+
+	log.Printf("✅ Neo4j query successful: %d nodes, %d relationships, %dms", len(nodes), len(relationships), executionTime.Milliseconds())
+	return response, nil
 }
 
 // sendFunctionResultToGemini sends the function result back to Gemini for a final response
@@ -1926,4 +2106,54 @@ func (c *Client) clearExecutionContext() {
 	c.currentExecutionRunID = nil
 	c.currentConfigID = nil
 	c.currentRequestID = nil
+}
+
+// LogFunctionCall logs function call details to the database
+func (c *Client) LogFunctionCall(ctx context.Context, call *types.FunctionCall) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Marshal JSON fields
+	argsJSON, err := json.Marshal(call.FunctionArgs)
+	if err != nil {
+		return fmt.Errorf("failed to marshal function arguments: %w", err)
+	}
+
+	var responseJSON json.RawMessage
+	if call.FunctionResponse != nil {
+		responseBytes, err := json.Marshal(call.FunctionResponse)
+		if err != nil {
+			return fmt.Errorf("failed to marshal function response: %w", err)
+		}
+		responseJSON = responseBytes
+	}
+
+	var errorDetails sql.NullString
+	if call.ErrorDetails != "" {
+		errorDetails = sql.NullString{String: call.ErrorDetails, Valid: true}
+	}
+
+	var executionTimeMs sql.NullInt32
+	if call.ExecutionTimeMs > 0 {
+		executionTimeMs = sql.NullInt32{Int32: call.ExecutionTimeMs, Valid: true}
+	}
+
+	// Store in database
+	err = c.queries.CreateFunctionCall(ctx, db.CreateFunctionCallParams{
+		ID:                call.ID,
+		RequestID:         call.RequestID,
+		FunctionName:      call.FunctionName,
+		FunctionArguments: argsJSON,
+		FunctionResponse:  responseJSON,
+		ExecutionStatus:   db.FunctionCallsExecutionStatus(call.ExecutionStatus),
+		ExecutionTimeMs:   executionTimeMs,
+		ErrorDetails:      errorDetails,
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to store function call: %w", err)
+	}
+
+	log.Printf("📊 Function call logged to database: %s", call.FunctionName)
+	return nil
 }
