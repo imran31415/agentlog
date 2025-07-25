@@ -9,7 +9,10 @@ agentlog is a Go platform that wraps AI APIs (starting with Google Gemini) with 
 
 Get AgentLog running in 2 steps:
 
-### 1. Start the Backend Server
+### 1. Start the Backend Server 
+
+Update the config.env file with your local db and gemini api keys and then:
+
 ```bash
 make run-server
 ```
