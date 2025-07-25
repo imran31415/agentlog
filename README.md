@@ -2,6 +2,9 @@
 
 GoGent is a comprehensive Go platform that wraps AI APIs (starting with Google Gemini) with advanced multi-variation execution, database logging, and use case-specific implementations. It enables you to run the same AI prompt with different configurations, compare results, and implement domain-specific AI solutions like procurement management, legal analysis, and more.
 
+<img width="627" height="717" alt="image" src="https://github.com/user-attachments/assets/93715c59-6cc6-4aaa-98d9-467dcb5c8647" />
+
+
 ## 🚀 Quick Start
 
 Get AgentLog running in 2 simple steps:
@@ -12,7 +15,30 @@ make run-server
 ```
 This starts the GoGent backend on `localhost:8080` with REST API endpoints for multi-variation AI execution, function calling, and database logging.
 
-*[Screenshot: Backend server startup logs showing available endpoints]*
+```
+2025/07/24 20:36:54 Go SDK disabled - using REST API for all Gemini calls
+🚀 GoGent HTTP Server starting on port 8080
+📡 Health check: http://localhost:8080/health
+🔧 API endpoints:
+   POST /api/execute - Multi-variation execution
+   GET  /api/execution-runs - Execution history
+   GET  /api/configurations - List API configurations
+   GET  /api/functions - List function definitions
+   POST /api/functions - Create function definition
+   GET  /api/functions/{id} - Get function by ID
+   PUT  /api/functions/{id} - Update function
+   DELETE /api/functions/{id} - Delete function
+   POST /api/functions/test/{id} - Test function execution
+   GET  /api/database/stats - Database statistics
+   GET  /api/database/tables - Database tables
+💡 Use X-Use-Mock: true header for mock responses
+🔑 Set GEMINI_API_KEY in config.env for real API calls
+
+2025/07/24 20:36:57 📋 Listing function definitions from database
+2025/07/24 20:36:57 ✅ Successfully loaded 2 function definitions from database
+
+
+```
 
 ### 2. Start the Frontend App
 ```bash
@@ -20,13 +46,16 @@ make frontend-start
 ```
 This launches the React Native development server with the mobile interface for configuring AI models, executing prompts, and viewing results.
 
-*[Screenshot: Frontend mobile app showing configuration screen]*
+<img width="490" height="672" alt="image" src="https://github.com/user-attachments/assets/4a31e3d8-21e6-46e3-b041-1b272cee5f76" />
+
 
 ### That's it! 
 You now have a complete AI experimentation platform running locally. The frontend will connect to the backend automatically.
 
-*[Screenshot: Mobile app executing AI prompts with multiple configurations]*
-*[Screenshot: Results comparison view showing different AI model outputs]*
+<img width="482" height="276" alt="image" src="https://github.com/user-attachments/assets/285a93b3-ddae-4831-8583-0dd53bdff699" />
+
+<img width="480" height="437" alt="image" src="https://github.com/user-attachments/assets/7c5cac7d-9365-499a-a655-680206bf7f20" />
+
 
 ## 📋 Overview
 
