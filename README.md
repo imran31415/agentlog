@@ -1,6 +1,6 @@
-# GoGent - AI Multi-Variation Execution Platform with Interface Architecture
+# agentlog - AI Multi-Variation Execution Platform with Interface Architecture
 
-GoGent is a comprehensive Go platform that wraps AI APIs (starting with Google Gemini) with advanced multi-variation execution, database logging, and use case-specific implementations. It enables you to run the same AI prompt with different configurations, compare results, and implement domain-specific AI solutions like procurement management, legal analysis, and more.
+agentlog is a comprehensive Go platform that wraps AI APIs (starting with Google Gemini) with advanced multi-variation execution, database logging, and use case-specific implementations. It enables you to run the same AI prompt with different configurations, compare results, and implement domain-specific AI solutions like procurement management, legal analysis, and more.
 
 <img width="627" height="717" alt="image" src="https://github.com/user-attachments/assets/93715c59-6cc6-4aaa-98d9-467dcb5c8647" />
 
@@ -13,11 +13,11 @@ Get AgentLog running in 2 simple steps:
 ```bash
 make run-server
 ```
-This starts the GoGent backend on `localhost:8080` with REST API endpoints for multi-variation AI execution, function calling, and database logging.
+This starts the agentlog backend on `localhost:8080` with REST API endpoints for multi-variation AI execution, function calling, and database logging.
 
 ```
 2025/07/24 20:36:54 Go SDK disabled - using REST API for all Gemini calls
-🚀 GoGent HTTP Server starting on port 8080
+🚀 agentlog HTTP Server starting on port 8080
 📡 Health check: http://localhost:8080/health
 🔧 API endpoints:
    POST /api/execute - Multi-variation execution
@@ -128,7 +128,7 @@ AgentLog is a **centralized AI experimentation platform** that gives you complet
 ## 🏗️ Architecture
 
 ```
-GoGent Platform
+agentlog Platform
 ├── 🎯 Interface Layer
 │   ├── MultiVariationExecutor
 │   ├── ExecutionLogger  
@@ -141,7 +141,7 @@ GoGent Platform
 │   ├── ContentGenerator (extensible)
 │   └── RiskAssessor (extensible)
 ├── 🏭 Factory & Adapters
-│   ├── GoGentFactory
+│   ├── agentlogFactory
 │   ├── ClientAdapter
 │   └── MockFactory (testing)
 ├── 🗄️ Database Layer (MySQL + sqlc)
@@ -212,14 +212,14 @@ package main
 import (
     "context"
     "log"
-    "gogent/internal/factory"
+    "agentlog/internal/factory"
 )
 
 func main() {
     // Create procurement manager with default config
     procurementManager, err := factory.QuickCreateProcurementManager(
         "your-gemini-api-key",
-        "root:password@tcp(localhost:3306)/gogent?parseTime=true",
+        "root:password@tcp(localhost:3306)/agentlog?parseTime=true",
     )
     if err != nil {
         log.Fatal(err)
@@ -370,8 +370,8 @@ package main
 
 import (
     "context"
-    "gogent/internal/factory"
-    "gogent/internal/types"
+    "agentlog/internal/factory"
+    "agentlog/internal/types"
 )
 
 func main() {
@@ -447,8 +447,8 @@ package myusecase
 
 import (
     "context"
-    "gogent/internal/interfaces"
-    "gogent/internal/types"
+    "agentlog/internal/interfaces"
+    "agentlog/internal/types"
 )
 
 type MyUseCaseExecutor struct {
@@ -487,8 +487,8 @@ func (m *MyUseCaseExecutor) GetDefaultConfigurations() []types.APIConfiguration 
 ### Add to Factory
 
 ```go
-// In internal/factory/gogent_factory.go
-func (f *DefaultGoGentFactory) CreateCustomExecutor(useCaseName string, config *types.GeminiClientConfig, dbURL string) (interfaces.UseCaseSpecificExecutor, error) {
+// In internal/factory/agentlog_factory.go
+func (f *DefaultagentlogFactory) CreateCustomExecutor(useCaseName string, config *types.GeminiClientConfig, dbURL string) (interfaces.UseCaseSpecificExecutor, error) {
     switch useCaseName {
     case "my-custom-use-case":
         return f.createMyUseCaseExecutor(config, dbURL)
@@ -547,22 +547,22 @@ ORDER BY success_rate DESC, avg_time;
 ## 🗂️ Project Structure
 
 ```
-gogent/
-├── cmd/gogent/                    # Main application
+agentlog/
+├── cmd/agentlog/                    # Main application
 │   ├── main.go                   # Entry point with demo selection
 │   ├── simple_demo.go            # Mock demo (no DB/API needed)
 │   ├── real_api_demo.go          # Real API + database demo
 │   └── simple_real_api_demo.go   # Real API without database
 ├── internal/
 │   ├── interfaces/               # 🎯 Core interface definitions
-│   │   └── gogent.go            # All platform interfaces
+│   │   └── agentlog.go            # All platform interfaces
 │   ├── adapters/                # 🔌 Adapter layer
-│   │   └── gogent_adapter.go    # Adapts existing client to interfaces
+│   │   └── agentlog_adapter.go    # Adapts existing client to interfaces
 │   ├── factory/                 # 🏭 Factory pattern implementation
-│   │   └── gogent_factory.go    # Creates different implementations
+│   │   └── agentlog_factory.go    # Creates different implementations
 │   ├── db/                      # 🗄️ Generated database code (sqlc)
-│   ├── gogent/                  # 🔧 Core client implementation
-│   │   └── client.go            # Main GoGent client
+│   ├── agentlog/                  # 🔧 Core client implementation
+│   │   └── client.go            # Main agentlog client
 │   ├── gemini/                  # 🤖 Gemini API integration
 │   │   └── client.go            # Real Gemini API client
 │   └── types/                   # 📋 Type definitions
@@ -589,12 +589,12 @@ gogent/
 
 ```bash
 # Database Connection
-DB_URL=root:password@tcp(localhost:3306)/gogent?parseTime=true
+DB_URL=root:password@tcp(localhost:3306)/agentlog?parseTime=true
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your-password
-DB_NAME=gogent
+DB_NAME=agentlog
 
 # AI API Configuration  
 GEMINI_API_KEY=your-gemini-api-key
@@ -713,7 +713,7 @@ package tests
 
 import (
     "testing"
-    "gogent/internal/factory" 
+    "agentlog/internal/factory" 
 )
 
 func TestProcurementManager(t *testing.T) {
@@ -765,8 +765,8 @@ RUN make build
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates
-COPY --from=builder /app/bin/gogent /usr/local/bin/
-CMD ["gogent"]
+COPY --from=builder /app/bin/agentlog /usr/local/bin/
+CMD ["agentlog"]
 ```
 
 ### Performance Considerations
@@ -813,4 +813,4 @@ CMD ["gogent"]
 
 ---
 
-**GoGent empowers you to build intelligent, data-driven AI applications with the confidence that comes from systematic experimentation and comprehensive logging.** Start with procurement management or implement your own domain-specific AI solution using our proven interface architecture. 
+**agentlog empowers you to build intelligent, data-driven AI applications with the confidence that comes from systematic experimentation and comprehensive logging.** Start with procurement management or implement your own domain-specific AI solution using our proven interface architecture. 
