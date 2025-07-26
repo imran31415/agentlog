@@ -2,8 +2,8 @@
 
 -- name: CreateExecutionFunctionConfig :exec
 INSERT INTO execution_function_configs (
-    id, execution_run_id, function_definition_id, use_mock_response, execution_order
-) VALUES (?, ?, ?, ?, ?);
+    id, user_id, execution_run_id, function_definition_id, use_mock_response, execution_order
+) VALUES (?, ?, ?, ?, ?, ?);
 
 -- name: GetExecutionFunctionConfig :one
 SELECT * FROM execution_function_configs WHERE id = ?;

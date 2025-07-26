@@ -170,12 +170,14 @@ CREATE TABLE execution_logs (
 -- Execution function configs table
 CREATE TABLE execution_function_configs (
     id VARCHAR(255) PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL,
     execution_run_id VARCHAR(255) NOT NULL,
     function_definition_id VARCHAR(255) NOT NULL,
     use_mock_response BOOLEAN DEFAULT FALSE,
     execution_order INT DEFAULT 0,
     config JSON,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (execution_run_id) REFERENCES execution_runs(id) ON DELETE CASCADE,
     FOREIGN KEY (function_definition_id) REFERENCES function_definitions(id) ON DELETE CASCADE
 );
@@ -189,6 +191,8 @@ CREATE INDEX idx_api_responses_request_id ON api_responses(request_id);
 CREATE INDEX idx_function_calls_request_id ON function_calls(request_id);
 CREATE INDEX idx_execution_logs_execution_run_id ON execution_logs(execution_run_id);
 CREATE INDEX idx_execution_logs_configuration_id ON execution_logs(configuration_id);
+CREATE INDEX idx_execution_function_configs_user_id ON execution_function_configs(user_id);
+CREATE INDEX idx_execution_function_configs_execution_run_id ON execution_function_configs(execution_run_id);
 CREATE INDEX idx_user_sessions_user_id ON user_sessions(user_id);
 CREATE INDEX idx_user_sessions_token ON user_sessions(token);
 CREATE INDEX idx_function_definitions_user_id ON function_definitions(user_id);

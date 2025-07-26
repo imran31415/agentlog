@@ -178,8 +178,8 @@ func (c *Client) LogAPIRequest(ctx context.Context, userID string, request *type
 		UserID:             userID,
 		ExecutionRunID:     request.ExecutionRunID,
 		ConfigurationID:    request.ConfigurationID,
-		RequestType:        db.ApiRequestsRequestType(request.RequestType),
-		Prompt:             request.Prompt,
+		RequestType:        sql.NullString{String: string(request.RequestType), Valid: true},
+		Prompt:             sql.NullString{String: request.Prompt, Valid: request.Prompt != ""},
 		Context:            sql.NullString{String: request.Context, Valid: request.Context != ""},
 		FunctionName:       sql.NullString{String: request.FunctionName, Valid: request.FunctionName != ""},
 		FunctionParameters: convertStringToRawMessage(functionParamsJSON),
@@ -203,7 +203,7 @@ func (c *Client) LogAPIResponse(ctx context.Context, userID string, response *ty
 		ID:                   response.ID,
 		UserID:               userID,
 		RequestID:            response.RequestID,
-		ResponseStatus:       db.ApiResponsesResponseStatus(response.ResponseStatus),
+		ResponseStatus:       sql.NullString{String: string(response.ResponseStatus), Valid: true},
 		ResponseText:         sql.NullString{String: response.ResponseText, Valid: response.ResponseText != ""},
 		FunctionCallResponse: convertStringToRawMessage(functionCallResponseJSON),
 		UsageMetadata:        convertStringToRawMessage(usageMetadataJSON),
@@ -259,24 +259,28 @@ func (c *Client) ExecuteMultiVariation(ctx context.Context, userID string, reque
 		config.ID = uuid.New().String()
 		config.ExecutionRunID = executionRun.ID
 
-		// Set configuration context for logging
-		c.setExecutionContext(&executionRun.ID, &config.ID, nil)
-
 		// CRITICAL: Add function tools to configuration if function calling is enabled
 		if request.EnableFunctionCalling && len(request.FunctionTools) > 0 {
-			c.logExecutionEvent(types.LogLevelDebug, types.LogCategorySetup,
-				fmt.Sprintf("Adding %d function tools to configuration: %s", len(request.FunctionTools), config.VariationName), nil)
 			config.Tools = request.FunctionTools
-		} else {
-			c.logExecutionEvent(types.LogLevelWarn, types.LogCategorySetup,
-				fmt.Sprintf("No function tools added to configuration: enableFunctionCalling=%v, toolCount=%d", request.EnableFunctionCalling, len(request.FunctionTools)), nil)
 		}
 
-		// Save configuration
+		// Save configuration FIRST before setting context for logging
 		if err := c.CreateAPIConfiguration(ctx, userID, &config); err != nil {
 			c.logExecutionEvent(types.LogLevelError, types.LogCategoryError,
 				fmt.Sprintf("Failed to save configuration: %v", err), nil)
 			return nil, fmt.Errorf("failed to save configuration: %w", err)
+		}
+
+		// Set configuration context for logging AFTER saving to database
+		c.setExecutionContext(&executionRun.ID, &config.ID, nil)
+
+		// Log the function tools setup
+		if request.EnableFunctionCalling && len(request.FunctionTools) > 0 {
+			c.logExecutionEvent(types.LogLevelDebug, types.LogCategorySetup,
+				fmt.Sprintf("Adding %d function tools to configuration: %s", len(request.FunctionTools), config.VariationName), nil)
+		} else {
+			c.logExecutionEvent(types.LogLevelWarn, types.LogCategorySetup,
+				fmt.Sprintf("No function tools added to configuration: enableFunctionCalling=%v, toolCount=%d", request.EnableFunctionCalling, len(request.FunctionTools)), nil)
 		}
 
 		// Execute single variation
@@ -705,7 +709,12 @@ func (c *Client) callGeminiRestAPI(ctx context.Context, config *types.APIConfigu
 
 			// Handle function call
 			if part.FunctionCall.Name != "" {
-				log.Printf("🎯 FUNCTION CALL DETECTED: %s with args: %+v", part.FunctionCall.Name, part.FunctionCall.Args)
+				c.logExecutionEvent(types.LogLevelInfo, types.LogCategoryFunctionCall,
+					fmt.Sprintf("Function call detected: %s", part.FunctionCall.Name),
+					map[string]interface{}{
+						"functionName": part.FunctionCall.Name,
+						"arguments":    part.FunctionCall.Args,
+					})
 
 				// Execute the function call
 				startTime := time.Now()
@@ -724,7 +733,12 @@ func (c *Client) callGeminiRestAPI(ctx context.Context, config *types.APIConfigu
 				}
 
 				if err != nil {
-					log.Printf("❌ Function execution failed: %v", err)
+					c.logExecutionEvent(types.LogLevelError, types.LogCategoryFunctionCall,
+						fmt.Sprintf("Function execution failed: %v", err),
+						map[string]interface{}{
+							"functionName": part.FunctionCall.Name,
+							"error":        err.Error(),
+						})
 					functionCall.ExecutionStatus = "error"
 					functionCall.ErrorDetails = err.Error()
 					// Return error response but don't fail completely
@@ -734,21 +748,40 @@ func (c *Client) callGeminiRestAPI(ctx context.Context, config *types.APIConfigu
 					}
 					functionCall.FunctionResponse = functionResult
 				} else {
+					c.logExecutionEvent(types.LogLevelSuccess, types.LogCategoryFunctionCall,
+						fmt.Sprintf("Function executed successfully: %s", part.FunctionCall.Name),
+						map[string]interface{}{
+							"functionName":  part.FunctionCall.Name,
+							"executionTime": executionTime,
+							"resultPreview": fmt.Sprintf("%v", functionResult)[:min(100, len(fmt.Sprintf("%v", functionResult)))],
+						})
 					functionCall.ExecutionStatus = "success"
 				}
 
 				// Log function call to database
 				if logErr := c.LogFunctionCall(ctx, functionCall); logErr != nil {
-					log.Printf("⚠️ Failed to log function call to database: %v", logErr)
+					c.logExecutionEvent(types.LogLevelWarn, types.LogCategoryError,
+						fmt.Sprintf("Failed to log function call to database: %v", logErr), nil)
 				}
 
 				// Send function result back to Gemini to get final response
 				finalResponse, err := c.sendFunctionResultToGemini(ctx, config, request, part.FunctionCall.Name, functionResult, finalPrompt)
 				if err != nil {
-					log.Printf("❌ Failed to get final response from Gemini: %v", err)
+					c.logExecutionEvent(types.LogLevelError, types.LogCategoryAPICall,
+						fmt.Sprintf("Failed to get final response from Gemini: %v", err),
+						map[string]interface{}{
+							"functionName": part.FunctionCall.Name,
+							"error":        err.Error(),
+						})
 					// Fall back to just indicating the function was called
 					responseText = fmt.Sprintf("I called the %s function with the provided parameters and received the result.", part.FunctionCall.Name)
 				} else {
+					c.logExecutionEvent(types.LogLevelSuccess, types.LogCategoryAPICall,
+						"Got final response from Gemini after function execution",
+						map[string]interface{}{
+							"functionName":    part.FunctionCall.Name,
+							"responsePreview": finalResponse[:min(100, len(finalResponse))],
+						})
 					responseText = finalResponse
 				}
 
@@ -759,7 +792,7 @@ func (c *Client) callGeminiRestAPI(ctx context.Context, config *types.APIConfigu
 					"result":        functionResult,
 				}
 
-				log.Printf("✅ Function executed successfully: %s", part.FunctionCall.Name)
+				// Function execution complete
 				break // Only handle the first function call
 			}
 		}
@@ -804,19 +837,31 @@ func (c *Client) callGeminiRestAPI(ctx context.Context, config *types.APIConfigu
 
 // executeFunctionCall executes a function call and returns the result
 func (c *Client) executeFunctionCall(ctx context.Context, functionName string, args map[string]interface{}) (map[string]interface{}, error) {
-	log.Printf("🔧 Executing function: %s with args: %+v", functionName, args)
+	c.logExecutionEvent(types.LogLevelInfo, types.LogCategoryFunctionCall,
+		fmt.Sprintf("Executing function: %s", functionName),
+		map[string]interface{}{
+			"functionName": functionName,
+			"args":         args,
+		})
 
 	// Handle weather function with real API call
-	if functionName == "get_weather" {
+	if functionName == "get_current_weather" {
 		location, ok := args["location"].(string)
 		if !ok {
+			c.logExecutionEvent(types.LogLevelError, types.LogCategoryFunctionCall,
+				"Weather function failed: location parameter missing or invalid", nil)
 			return nil, fmt.Errorf("location parameter missing or invalid")
 		}
 
 		// Call real weather API
 		result, err := c.callWeatherAPI(ctx, location, c.config.OpenWeatherAPIKey)
 		if err != nil {
-			log.Printf("❌ Weather API call failed: %v", err)
+			c.logExecutionEvent(types.LogLevelError, types.LogCategoryFunctionCall,
+				fmt.Sprintf("Weather API call failed: %v", err),
+				map[string]interface{}{
+					"location": location,
+					"error":    err.Error(),
+				})
 			// Fallback to mock data if API call fails
 			result = map[string]interface{}{
 				"location":    location,
@@ -828,9 +873,17 @@ func (c *Client) executeFunctionCall(ctx context.Context, functionName string, a
 				"description": fmt.Sprintf("Current weather in %s: 72°F, sunny with clear skies (fallback data)", location),
 				"error":       "Real weather data unavailable, showing fallback data",
 			}
+			c.logExecutionEvent(types.LogLevelWarn, types.LogCategoryFunctionCall,
+				fmt.Sprintf("Using fallback weather data for %s", location), nil)
+		} else {
+			c.logExecutionEvent(types.LogLevelSuccess, types.LogCategoryFunctionCall,
+				fmt.Sprintf("Weather function executed successfully for %s", location),
+				map[string]interface{}{
+					"location": location,
+					"result":   result,
+				})
 		}
 
-		log.Printf("✅ Weather function executed for %s", location)
 		return result, nil
 	}
 
@@ -891,6 +944,8 @@ func (c *Client) executeFunctionCall(ctx context.Context, functionName string, a
 // callWeatherAPI makes a real API call to OpenWeatherMap API
 func (c *Client) callWeatherAPI(ctx context.Context, location string, apiKey string) (map[string]interface{}, error) {
 	if apiKey == "" {
+		c.logExecutionEvent(types.LogLevelError, types.LogCategoryAPICall,
+			"OpenWeather API key not provided", nil)
 		return nil, fmt.Errorf("OpenWeather API key not provided")
 	}
 
@@ -903,11 +958,19 @@ func (c *Client) callWeatherAPI(ctx context.Context, location string, apiKey str
 
 	apiURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
 
-	log.Printf("🌤️ Calling OpenWeatherMap API for location: %s", location)
+	c.logExecutionEvent(types.LogLevelInfo, types.LogCategoryAPICall,
+		fmt.Sprintf("Calling OpenWeatherMap API for location: %s", location),
+		map[string]interface{}{
+			"location":     location,
+			"apiURL":       fmt.Sprintf("%s?q=%s&appid=***&units=imperial", baseURL, location), // Hide API key
+			"apiKeyMasked": "***" + apiKey[len(apiKey)-4:],                                     // Show last 4 chars for debugging
+		})
 
 	// Create HTTP request with timeout
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
+		c.logExecutionEvent(types.LogLevelError, types.LogCategoryAPICall,
+			fmt.Sprintf("Failed to create weather API request: %v", err), nil)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -921,6 +984,12 @@ func (c *Client) callWeatherAPI(ctx context.Context, location string, apiKey str
 
 	resp, err := client.Do(req)
 	if err != nil {
+		c.logExecutionEvent(types.LogLevelError, types.LogCategoryAPICall,
+			fmt.Sprintf("Weather API request failed: %v", err),
+			map[string]interface{}{
+				"location": location,
+				"error":    err.Error(),
+			})
 		return nil, fmt.Errorf("failed to call weather API: %w", err)
 	}
 	defer resp.Body.Close()
@@ -928,12 +997,23 @@ func (c *Client) callWeatherAPI(ctx context.Context, location string, apiKey str
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logExecutionEvent(types.LogLevelError, types.LogCategoryAPICall,
+			fmt.Sprintf("Failed to read weather API response: %v", err), nil)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	// Check for API errors
 	if resp.StatusCode != 200 {
-		log.Printf("❌ Weather API returned status: %d, body: %s", resp.StatusCode, string(body))
+		// Provide helpful suggestions based on the error
+		suggestion := c.getLocationSuggestion(location, resp.StatusCode, string(body))
+		c.logExecutionEvent(types.LogLevelError, types.LogCategoryAPICall,
+			fmt.Sprintf("Weather API returned status: %d", resp.StatusCode),
+			map[string]interface{}{
+				"location":     location,
+				"statusCode":   resp.StatusCode,
+				"responseBody": string(body),
+				"suggestion":   suggestion,
+			})
 		return nil, fmt.Errorf("weather API returned status %d", resp.StatusCode)
 	}
 
@@ -954,6 +1034,13 @@ func (c *Client) callWeatherAPI(ctx context.Context, location string, apiKey str
 	}
 
 	if err := json.Unmarshal(body, &weatherResp); err != nil {
+		c.logExecutionEvent(types.LogLevelError, types.LogCategoryAPICall,
+			fmt.Sprintf("Failed to parse weather API response: %v", err),
+			map[string]interface{}{
+				"location":     location,
+				"responseBody": string(body),
+				"error":        err.Error(),
+			})
 		return nil, fmt.Errorf("failed to parse weather response: %w", err)
 	}
 
@@ -975,8 +1062,47 @@ func (c *Client) callWeatherAPI(ctx context.Context, location string, apiKey str
 		"description": fmt.Sprintf("Current weather in %s: %.0f°F, %s", weatherResp.Name, weatherResp.Main.Temp, description),
 	}
 
-	log.Printf("✅ Weather API call successful for %s: %s, %.0f°F", weatherResp.Name, condition, weatherResp.Main.Temp)
+	c.logExecutionEvent(types.LogLevelSuccess, types.LogCategoryAPICall,
+		fmt.Sprintf("Weather API call successful for %s: %s, %.0f°F", weatherResp.Name, condition, weatherResp.Main.Temp),
+		map[string]interface{}{
+			"location":    weatherResp.Name,
+			"temperature": weatherResp.Main.Temp,
+			"condition":   condition,
+			"humidity":    weatherResp.Main.Humidity,
+			"windSpeed":   weatherResp.Wind.Speed,
+		})
 	return result, nil
+}
+
+// getLocationSuggestion provides helpful location format suggestions based on API errors
+func (c *Client) getLocationSuggestion(location string, statusCode int, responseBody string) string {
+	// Parse location to understand format
+	parts := strings.Split(location, ",")
+
+	if statusCode == 404 {
+		// City not found - provide suggestions based on current input
+		if len(parts) == 1 {
+			// Just city name provided
+			city := strings.TrimSpace(parts[0])
+			return fmt.Sprintf("City '%s' not found. Try: '%s, State' (e.g., '%s, CA'), '%s, Country' (e.g., '%s, US'), or full format '%s, State, Country'",
+				city, city, city, city, city, city)
+		} else if len(parts) == 2 {
+			// City and state/country provided
+			city := strings.TrimSpace(parts[0])
+			second := strings.TrimSpace(parts[1])
+			return fmt.Sprintf("Location '%s' not found. Try: '%s, %s, US' (if US state), '%s, %s' with full country name, or check spelling",
+				location, city, second, city, second)
+		} else {
+			// Full format or more parts
+			return fmt.Sprintf("Location '%s' not found. Check spelling, try common abbreviations (CA instead of California), or use English city names", location)
+		}
+	} else if statusCode == 401 {
+		return "Invalid API key. Please check your OpenWeather API key configuration"
+	} else if statusCode == 429 {
+		return "API rate limit exceeded. Please try again in a moment"
+	} else {
+		return fmt.Sprintf("Weather API error (status %d). Try simpler location formats like 'CityName' or 'CityName, Country'", statusCode)
+	}
 }
 
 // callNeo4jAPI executes a Cypher query against a Neo4j database
@@ -1529,8 +1655,8 @@ func (c *Client) StoreComparisonResult(ctx context.Context, userID string, compa
 	err = c.queries.CreateComparisonResult(ctx, db.CreateComparisonResultParams{
 		ID:                    comparison.ID,
 		ExecutionRunID:        comparison.ExecutionRunID,
-		ComparisonType:        db.ComparisonResultsComparisonType(comparisonType),
-		MetricName:            comparison.MetricName,
+		ComparisonType:        sql.NullString{String: comparisonType, Valid: true},
+		MetricName:            sql.NullString{String: comparison.MetricName, Valid: true},
 		ConfigurationScores:   configScoresJSON,
 		BestConfigurationID:   sql.NullString{String: comparison.BestConfigurationID, Valid: comparison.BestConfigurationID != ""},
 		BestConfigurationData: bestConfigJSON,
@@ -1590,8 +1716,8 @@ func (c *Client) GetComparisonResult(ctx context.Context, executionRunID string)
 	comparison := &types.ComparisonResult{
 		ID:                  row.ID,
 		ExecutionRunID:      row.ExecutionRunID,
-		ComparisonType:      string(row.ComparisonType),
-		MetricName:          row.MetricName,
+		ComparisonType:      row.ComparisonType.String,
+		MetricName:          row.MetricName.String,
 		ConfigurationScores: configScores,
 		BestConfigurationID: row.BestConfigurationID.String,
 		BestConfiguration:   bestConfig,
@@ -1650,8 +1776,8 @@ func (c *Client) ListComparisonResults(ctx context.Context) ([]*types.Comparison
 		comparison := &types.ComparisonResult{
 			ID:                  row.ID,
 			ExecutionRunID:      row.ExecutionRunID,
-			ComparisonType:      string(row.ComparisonType),
-			MetricName:          row.MetricName,
+			ComparisonType:      row.ComparisonType.String,
+			MetricName:          row.MetricName.String,
 			ConfigurationScores: configScores,
 			BestConfigurationID: row.BestConfigurationID.String,
 			BestConfiguration:   bestConfig,
@@ -1825,7 +1951,7 @@ func (c *Client) GetExecutionResult(ctx context.Context, userID string, executio
 
 		tool := types.Tool{
 			Name:        funcDef.Name,
-			Description: funcDef.Description,
+			Description: funcDef.Description.String,
 			Parameters:  parametersSchema,
 		}
 		functionTools = append(functionTools, tool)
@@ -1871,8 +1997,8 @@ func (c *Client) GetExecutionResult(ctx context.Context, userID string, executio
 			ID:              row.ID,
 			ExecutionRunID:  row.ExecutionRunID,
 			ConfigurationID: row.ConfigurationID,
-			RequestType:     types.RequestType(row.RequestType),
-			Prompt:          row.Prompt,
+			RequestType:     types.RequestType(row.RequestType.String),
+			Prompt:          row.Prompt.String,
 			Context:         row.Context.String,
 			FunctionName:    row.FunctionName.String,
 			CreatedAt:       row.CreatedAt.Time,
@@ -1920,7 +2046,7 @@ func (c *Client) GetExecutionResult(ctx context.Context, userID string, executio
 		response := &types.APIResponse{
 			ID:             respRow.ID,
 			RequestID:      respRow.RequestID,
-			ResponseStatus: types.ResponseStatus(respRow.ResponseStatus),
+			ResponseStatus: types.ResponseStatus(respRow.ResponseStatus.String),
 			ResponseText:   respRow.ResponseText.String,
 			FinishReason:   respRow.FinishReason.String,
 			ErrorMessage:   respRow.ErrorMessage.String,
@@ -1983,8 +2109,8 @@ func (c *Client) GetExecutionResult(ctx context.Context, userID string, executio
 			ExecutionRunID:  dbLog.ExecutionRunID,
 			ConfigurationID: configID,
 			RequestID:       requestID,
-			LogLevel:        types.LogLevel(dbLog.LogLevel),
-			LogCategory:     types.LogCategory(dbLog.LogCategory),
+			LogLevel:        types.LogLevel(dbLog.LogLevel.String),
+			LogCategory:     types.LogCategory(dbLog.LogCategory.String),
 			Message:         dbLog.Message,
 			Details:         details,
 			Timestamp:       timestamp,
@@ -2066,6 +2192,7 @@ func (c *Client) storeFunctionExecutionConfigs(ctx context.Context, userID strin
 		configID := uuid.New().String()
 		err = c.queries.CreateExecutionFunctionConfig(ctx, db.CreateExecutionFunctionConfigParams{
 			ID:                   configID,
+			UserID:               userID,
 			ExecutionRunID:       executionRunID,
 			FunctionDefinitionID: funcDef.ID,
 			UseMockResponse:      sql.NullBool{Bool: true, Valid: true}, // Default to mock for replay
@@ -2116,8 +2243,8 @@ func (c *Client) logExecutionEvent(level types.LogLevel, category types.LogCateg
 		ExecutionRunID:  *c.currentExecutionRunID,
 		ConfigurationID: configID,
 		RequestID:       requestID,
-		LogLevel:        db.ExecutionLogsLogLevel(level),
-		LogCategory:     db.ExecutionLogsLogCategory(category),
+		LogLevel:        sql.NullString{String: string(level), Valid: true},
+		LogCategory:     sql.NullString{String: string(category), Valid: true},
 		Message:         message,
 		Details:         detailsJSON,
 	})
@@ -2276,7 +2403,7 @@ func (c *Client) LogFunctionCall(ctx context.Context, call *types.FunctionCall) 
 		FunctionName:      call.FunctionName,
 		FunctionArguments: argsJSON,
 		FunctionResponse:  responseJSON,
-		ExecutionStatus:   db.FunctionCallsExecutionStatus(call.ExecutionStatus),
+		ExecutionStatus:   sql.NullString{String: call.ExecutionStatus, Valid: true},
 		ExecutionTimeMs:   executionTimeMs,
 		ErrorDetails:      errorDetails,
 	})
