@@ -107,11 +107,14 @@ message ExecuteRequest {
   repeated Tool function_tools = 7;
   ComparisonConfig comparison_config = 8;
   bool use_mock = 9;
-  string openweather_api_key = 10;
-  string neo4j_url = 11;
-  string neo4j_username = 12;
-  string neo4j_password = 13;
-  string neo4j_database = 14;
+  // Session-based API keys (not stored on backend)
+  map<string, string> session_api_keys = 15; // All API keys for this session (gemini, openweather, neo4j, etc.)
+  // Legacy fields - deprecated, use session_api_keys instead
+  string openweather_api_key = 10 [deprecated = true];
+  string neo4j_url = 11 [deprecated = true];
+  string neo4j_username = 12 [deprecated = true];
+  string neo4j_password = 13 [deprecated = true];
+  string neo4j_database = 14 [deprecated = true];
 }
 
 // Execute response with execution ID
@@ -392,6 +395,8 @@ message FunctionDefinition {
   google.protobuf.Struct headers = 10;
   google.protobuf.Struct auth_config = 11;
   bool is_active = 12;
+  repeated string required_api_keys = 15; // API keys required for this function
+  google.protobuf.Struct api_key_validation = 16; // Validation rules for each API key
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
 }

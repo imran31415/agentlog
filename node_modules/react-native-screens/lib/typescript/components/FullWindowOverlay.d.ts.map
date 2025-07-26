@@ -1,0 +1,1 @@
+{"version":3,"file":"FullWindowOverlay.d.ts","sourceRoot":"","sources":["../../../src/components/FullWindowOverlay.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,EAAqB,SAAS,EAAE,MAAM,OAAO,CAAC;AAqB5D,KAAK,sBAAsB,GAAG;IAC5B,QAAQ,EAAE,SAAS,CAAC;IACpB,0CAA0C,CAAC,EAAE,OAAO,CAAC;CACtD,CAAC;AAEF,iBAAS,iBAAiB,CAAC,KAAK,EAAE,sBAAsB,qBAevD;AAED,eAAe,iBAAiB,CAAC"}

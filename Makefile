@@ -23,13 +23,21 @@ generate-db: install-sqlc
 init-db:
 	mysql -h $(DB_HOST) -u $(DB_USER) -p$(DB_PASSWORD) < sql/schema.sql
 
-# Run database migrations
+# Run database migrations using golang-migrate
 migrate:
-	DB_URL=$(DB_URL) go run cmd/migrate/main.go
+	migrate -path migrations -database "mysql://root:Password123!@tcp(localhost:3306)/gogent" up
 
 # Show migration status
 migrate-status:
-	DB_URL=$(DB_URL) go run cmd/migrate/main.go -status
+	migrate -path migrations -database "mysql://root:Password123!@tcp(localhost:3306)/gogent" version
+
+# Force migration version (use when dirty)
+migrate-force:
+	migrate -path migrations -database "mysql://root:Password123!@tcp(localhost:3306)/gogent" force $(VERSION)
+
+# Reset database migrations
+migrate-reset:
+	migrate -path migrations -database "mysql://root:Password123!@tcp(localhost:3306)/gogent" drop -f
 
 # Build migration tool
 build-migrate:
@@ -108,6 +116,17 @@ kill-server:
 	@lsof -ti:8080 | xargs kill -9 2>/dev/null || true
 	@echo "✅ All processes stopped and port 8080 freed"
 
+# Kill all frontend processes and free port 8081
+kill-frontend:
+	@echo "🧹 Stopping all frontend processes..."
+	@pkill -9 -f "expo start" 2>/dev/null || true
+	@pkill -9 -f "yarn start" 2>/dev/null || true
+	@pkill -9 -f "yarn dev" 2>/dev/null || true
+	@pkill -9 -f "metro" 2>/dev/null || true
+	@lsof -ti:8081 | xargs kill -9 2>/dev/null || true
+	@lsof -ti:8082 | xargs kill -9 2>/dev/null || true
+	@echo "✅ All frontend processes stopped and ports 8081/8082 freed"
+
 # Frontend Setup Commands
 # =======================
 
@@ -145,8 +164,17 @@ frontend-android:
 	@echo "🤖 Starting Android app..."
 	cd frontend && yarn android
 
-# Run on web browser
+# Run on web browser (with cleanup)
 frontend-web:
+	@echo "🧹 Cleaning up any existing frontend processes..."
+	@pkill -9 -f "expo start" 2>/dev/null || true
+	@pkill -9 -f "yarn start" 2>/dev/null || true
+	@pkill -9 -f "yarn dev" 2>/dev/null || true
+	@pkill -9 -f "metro" 2>/dev/null || true
+	@lsof -ti:8081 | xargs kill -9 2>/dev/null || true
+	@lsof -ti:8082 | xargs kill -9 2>/dev/null || true
+	@sleep 2
+	@echo "✅ Ports 8081/8082 are now available"
 	@echo "🌐 Starting web app..."
 	cd frontend && yarn web
 
@@ -204,6 +232,10 @@ lint:
 # Clean everything (backend + frontend)
 clean-all: clean frontend-clean
 	@echo "🧹 Cleaned backend and frontend"
+
+# Kill everything (backend + frontend processes)
+kill-all: kill-server kill-frontend
+	@echo "🧹 Stopped all processes (backend + frontend)"
 
 # Install all dependencies (backend + frontend)
 install-all: install-deps frontend-install
@@ -279,11 +311,15 @@ commands:
 	@echo "  frontend-start         # Start Expo dev server"
 	@echo "  frontend-ios           # Run on iOS simulator"
 	@echo "  frontend-android       # Run on Android simulator"
-	@echo "  frontend-web           # Run in web browser"
+	@echo "  frontend-web           # Run in web browser (with cleanup)"
 	@echo "  frontend-build         # Build for production"
+	@echo "  kill-frontend          # Stop all frontend processes"
 	@echo ""
 	@echo "🧹 Maintenance:"
 	@echo "  clean-all              # Clean everything"
+	@echo "  kill-all               # Stop all processes"
+	@echo "  kill-server            # Stop backend processes"
+	@echo "  kill-frontend          # Stop frontend processes"
 	@echo "  frontend-clean         # Clean frontend only"
 	@echo "  frontend-reinstall     # Reinstall frontend deps"
 	@echo "  frontend-lint          # Lint frontend code"

@@ -102,6 +102,8 @@ type FunctionDefinition struct {
 	Headers          map[string]interface{} `json:"headers,omitempty"`      // HTTP headers
 	AuthConfig       map[string]interface{} `json:"authConfig,omitempty"`   // Authentication config
 	IsActive         bool                   `json:"isActive"`
+	RequiredApiKeys  []string               `json:"requiredApiKeys,omitempty"`  // API keys required for this function
+	ApiKeyValidation map[string]interface{} `json:"apiKeyValidation,omitempty"` // Validation rules for each API key
 	CreatedAt        time.Time              `json:"createdAt"`
 	UpdatedAt        time.Time              `json:"updatedAt"`
 }
@@ -220,19 +222,31 @@ type FunctionCall struct {
 	CreatedAt        time.Time              `json:"created_at"`
 }
 
+// SessionApiKeys represents API keys passed with each request (not stored on backend)
+type SessionApiKeys struct {
+	GeminiApiKey      string `json:"geminiApiKey,omitempty"`
+	OpenWeatherApiKey string `json:"openWeatherApiKey,omitempty"`
+	Neo4jUrl          string `json:"neo4jUrl,omitempty"`
+	Neo4jUsername     string `json:"neo4jUsername,omitempty"`
+	Neo4jPassword     string `json:"neo4jPassword,omitempty"`
+	Neo4jDatabase     string `json:"neo4jDatabase,omitempty"`
+}
+
 // GeminiClientConfig represents the configuration for the Gemini client
 type GeminiClientConfig struct {
-	APIKey            string `json:"api_key"`
-	OpenWeatherAPIKey string `json:"openweather_api_key,omitempty"`
-	// Neo4j configuration
-	Neo4jURL      string `json:"neo4j_url,omitempty"`
-	Neo4jUsername string `json:"neo4j_username,omitempty"`
-	Neo4jPassword string `json:"neo4j_password,omitempty"`
-	Neo4jDatabase string `json:"neo4j_database,omitempty"`
-	ProjectID     string `json:"project_id,omitempty"`
-	Region        string `json:"region,omitempty"`
-	MaxRetries    int    `json:"max_retries"`
-	TimeoutSecs   int    `json:"timeout_secs"`
+	// DEPRECATED: These fields are kept for backward compatibility
+	// Use SessionApiKeys for new implementations
+	APIKey            string `json:"api_key,omitempty"`             // DEPRECATED: Use session API keys instead
+	OpenWeatherAPIKey string `json:"openweather_api_key,omitempty"` // DEPRECATED: Use session API keys instead
+	Neo4jURL          string `json:"neo4j_url,omitempty"`           // DEPRECATED: Use session API keys instead
+	Neo4jUsername     string `json:"neo4j_username,omitempty"`      // DEPRECATED: Use session API keys instead
+	Neo4jPassword     string `json:"neo4j_password,omitempty"`      // DEPRECATED: Use session API keys instead
+	Neo4jDatabase     string `json:"neo4j_database,omitempty"`      // DEPRECATED: Use session API keys instead
+
+	ProjectID   string `json:"project_id,omitempty"`
+	Region      string `json:"region,omitempty"`
+	MaxRetries  int    `json:"max_retries"`
+	TimeoutSecs int    `json:"timeout_secs"`
 }
 
 // MultiExecutionRequest represents a request to execute multiple variations
@@ -245,6 +259,7 @@ type MultiExecutionRequest struct {
 	Configurations        []APIConfiguration `json:"configurations"`
 	FunctionTools         []Tool             `json:"functionTools,omitempty"`
 	ComparisonConfig      *ComparisonConfig  `json:"comparisonConfig,omitempty"`
+	SessionApiKeys        *SessionApiKeys    `json:"sessionApiKeys,omitempty"` // API keys for this session
 }
 
 // ComparisonConfig represents configuration for comparing execution results

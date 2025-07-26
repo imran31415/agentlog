@@ -13,9 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"gogent/internal/auth"
 	"gogent/internal/gogent"
 	"gogent/internal/types"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
 )
 
@@ -25,6 +27,8 @@ type Server struct {
 	config         *types.GeminiClientConfig
 	executions     map[string]*ExecutionStatus
 	executionMutex sync.RWMutex
+	authService    *auth.AuthService
+	authHandlers   *auth.AuthHandlers
 }
 
 // ExecutionStatus tracks the status of an async execution
@@ -47,6 +51,7 @@ func NewServer() (*Server, error) {
 	// Get configuration from environment
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	dbURL := os.Getenv("DB_URL")
+	jwtSecret := os.Getenv("JWT_SECRET")
 
 	if dbURL == "" {
 		return nil, fmt.Errorf("DB_URL environment variable is required")
@@ -65,10 +70,16 @@ func NewServer() (*Server, error) {
 		return nil, fmt.Errorf("failed to create gogent client: %w", err)
 	}
 
+	// Create auth service and handlers
+	authService := auth.NewAuthService(client.GetDB(), jwtSecret)
+	authHandlers := auth.NewAuthHandlers(authService)
+
 	return &Server{
-		client:     client,
-		config:     config,
-		executions: make(map[string]*ExecutionStatus),
+		client:       client,
+		config:       config,
+		executions:   make(map[string]*ExecutionStatus),
+		authService:  authService,
+		authHandlers: authHandlers,
 	}, nil
 }
 
@@ -94,10 +105,29 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// Test connection endpoint
+func (s *Server) testHandler(w http.ResponseWriter, r *http.Request) {
+	response := map[string]interface{}{
+		"message":   "Connection successful",
+		"timestamp": time.Now().Format(time.RFC3339),
+		"service":   "gogent-server",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 // Execute multi-variation endpoint (async)
 func (s *Server) executeHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract user ID from JWT context
+	userID, err := s.getUserID(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -130,8 +160,8 @@ func (s *Server) executeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.executionMutex.Unlock()
 
-	// Start async execution
-	go s.runAsyncExecution(executionID, &request, r.Header.Get("X-Use-Mock") == "true", r.Header)
+	// Start async execution with user ID
+	go s.runAsyncExecution(executionID, &request, r.Header.Get("X-Use-Mock") == "true", r.Header, userID)
 
 	// Return immediately with execution ID
 	response := map[string]interface{}{
@@ -147,8 +177,17 @@ func (s *Server) executeHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// Helper function to extract user ID from request context
+func (s *Server) getUserID(r *http.Request) (string, error) {
+	user, ok := auth.GetUserFromContext(r.Context())
+	if !ok || user == nil {
+		return "", fmt.Errorf("user not found in context")
+	}
+	return user.ID, nil
+}
+
 // runAsyncExecution runs the execution in a goroutine
-func (s *Server) runAsyncExecution(executionID string, request *types.MultiExecutionRequest, useMock bool, headers http.Header) {
+func (s *Server) runAsyncExecution(executionID string, request *types.MultiExecutionRequest, useMock bool, headers http.Header, userID string) {
 	// Update status to running
 	s.executionMutex.Lock()
 	if status, exists := s.executions[executionID]; exists {
@@ -156,13 +195,22 @@ func (s *Server) runAsyncExecution(executionID string, request *types.MultiExecu
 	}
 	s.executionMutex.Unlock()
 
-	log.Printf("🚀 Starting async execution: %s", executionID)
+	log.Printf("🚀 Starting async execution: %s for user: %s", executionID, userID)
 
-	// Use server's API key
-	apiKey := s.config.APIKey
+	// Use API key from frontend headers if available, fallback to server's API key
+	apiKey := headers.Get("X-Gemini-API-Key")
+	if apiKey != "" {
+		log.Printf("🔑 Using Gemini API key from frontend: %s...", apiKey[:10])
+	} else {
+		apiKey = s.config.APIKey
+		if apiKey != "" {
+			log.Printf("🔑 Using server Gemini API key: %s...", apiKey[:10])
+		}
+	}
+
 	if apiKey == "" {
 		useMock = true
-		log.Printf("No API key available, using mock responses")
+		log.Printf("⚠️ No Gemini API key available (frontend or server), using mock responses")
 	}
 
 	// Get OpenWeather API key from headers
@@ -220,7 +268,7 @@ func (s *Server) runAsyncExecution(executionID string, request *types.MultiExecu
 		defer mockClient.Close()
 
 		log.Printf("Using mock client with logging enabled")
-		result, err = mockClient.ExecuteMultiVariation(ctx, request)
+		result, err = mockClient.ExecuteMultiVariation(ctx, userID, request)
 		if err != nil {
 			log.Printf("Mock execution failed: %v", err)
 			s.markExecutionFailed(executionID, fmt.Sprintf("Mock execution failed: %v", err))
@@ -252,7 +300,7 @@ func (s *Server) runAsyncExecution(executionID string, request *types.MultiExecu
 		defer tempClient.Close()
 
 		log.Printf("Using temporary client for real API execution")
-		result, err = tempClient.ExecuteMultiVariation(ctx, request)
+		result, err = tempClient.ExecuteMultiVariation(ctx, userID, request)
 		if err != nil {
 			log.Printf("Execution failed with temporary client: %v", err)
 			s.markExecutionFailed(executionID, fmt.Sprintf("Execution failed: %v", err))
@@ -294,6 +342,13 @@ func (s *Server) executionStatusHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Extract user ID for all subsequent operations
+	userID, err := s.getUserID(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	// Extract execution ID from URL path
 	// URL format: /api/execution-runs/status/{execution-id}
 	path := r.URL.Path
@@ -317,9 +372,10 @@ func (s *Server) executionStatusHandler(w http.ResponseWriter, r *http.Request) 
 
 	if !exists {
 		log.Printf("❌ Execution %s not found in active executions map", executionID)
+
 		// Check if this is a real execution ID from database
 		ctx := context.Background()
-		realResult, err := s.client.GetExecutionResult(ctx, executionID)
+		realResult, err := s.client.GetExecutionResult(ctx, userID, executionID)
 		if err != nil {
 			log.Printf("❌ Execution %s not found in database either: %v", executionID, err)
 			response := map[string]interface{}{
@@ -356,7 +412,7 @@ func (s *Server) executionStatusHandler(w http.ResponseWriter, r *http.Request) 
 			}
 
 			log.Printf("🔍 Trying to get execution result from database for real ID: %s (temp ID: %s)", realExecutionRunID, executionID)
-			realResult, err := s.client.GetExecutionResult(ctx, realExecutionRunID)
+			realResult, err := s.client.GetExecutionResult(ctx, userID, realExecutionRunID)
 			if err == nil {
 				log.Printf("✅ Successfully retrieved execution result from database for real ID: %s", realExecutionRunID)
 				response := map[string]interface{}{
@@ -407,49 +463,22 @@ func (s *Server) configurationsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("📋 Listing API configurations")
-
-	// Return default configurations that the frontend expects
-	defaultConfigurations := []map[string]interface{}{
-		{
-			"id":            "config-conservative",
-			"variationName": "Conservative",
-			"modelName":     "gemini-1.5-flash",
-			"systemPrompt":  "You are a helpful assistant. Provide balanced, informative responses.",
-			"temperature":   0.2,
-			"maxTokens":     500,
-			"topP":          0.8,
-			"topK":          10,
-			"createdAt":     "2025-01-24T10:00:00Z",
-		},
-		{
-			"id":            "config-balanced",
-			"variationName": "Balanced",
-			"modelName":     "gemini-1.5-flash",
-			"systemPrompt":  "You are a helpful assistant. Provide balanced, informative responses.",
-			"temperature":   0.5,
-			"maxTokens":     500,
-			"topP":          0.9,
-			"topK":          20,
-			"createdAt":     "2025-01-24T10:00:00Z",
-		},
-		{
-			"id":            "config-creative",
-			"variationName": "Creative",
-			"modelName":     "gemini-1.5-flash",
-			"systemPrompt":  "You are a creative assistant. Provide imaginative and engaging responses.",
-			"temperature":   0.8,
-			"maxTokens":     500,
-			"topP":          0.95,
-			"topK":          40,
-			"createdAt":     "2025-01-24T10:00:00Z",
-		},
+	userID, err := s.getUserID(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
-	log.Printf("✅ Returning %d default configurations", len(defaultConfigurations))
+	ctx := context.Background()
+	configs, err := s.client.ListAPIConfigurationsByUser(ctx, userID, 50, 0)
+	if err != nil {
+		log.Printf("⚠️ Failed to load user configurations from DB: %v", err)
+		http.Error(w, "Failed to load configurations", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(defaultConfigurations)
+	json.NewEncoder(w).Encode(configs)
 }
 
 // Mock execution for when API key is not available
@@ -598,21 +627,59 @@ func (s *Server) getSpecificExecutionRun(w http.ResponseWriter, r *http.Request,
 
 	log.Printf("📊 Getting REAL execution data for run: %s", runID)
 
+	// Check if this is a temporary ID and map to real execution run ID
+	realExecutionRunID := runID
+
+	// First, check if the mapping exists in memory
+	s.executionMutex.RLock()
+	if status, exists := s.executions[runID]; exists && status.RealExecutionRunID != "" {
+		realExecutionRunID = status.RealExecutionRunID
+		log.Printf("🔄 Mapped temp ID %s to real execution run ID: %s", runID, realExecutionRunID)
+	}
+	s.executionMutex.RUnlock()
+
+	// If no mapping found and this looks like a temporary ID, try to find by timestamp
+	if realExecutionRunID == runID && strings.HasPrefix(runID, "exec-") {
+		log.Printf("🔍 Temporary ID detected, attempting to find by recent executions: %s", runID)
+		userID, err := s.getUserID(r)
+		if err == nil && s.client != nil {
+			// Get recent execution runs (last 10) and find the most recent one
+			recentRuns, err := s.client.ListExecutionRuns(ctx, userID, 10, 0)
+			if err == nil && len(recentRuns) > 0 {
+				// Use the most recent execution run as a fallback
+				realExecutionRunID = recentRuns[0].ID
+				log.Printf("🎯 Using most recent execution run as fallback: %s", realExecutionRunID)
+			}
+		}
+	}
+
 	// Try to get REAL execution result from database
 	if s.client != nil {
-		executionResult, err := s.client.GetExecutionResult(ctx, runID)
+		userID, err := s.getUserID(r)
+		if err != nil {
+			log.Printf("❌ Failed to get user ID for execution run lookup: %v", err)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		executionResult, err := s.client.GetExecutionResult(ctx, userID, realExecutionRunID)
 		if err == nil && executionResult != nil {
 			log.Printf("✅ Found REAL execution data with %d results", len(executionResult.Results))
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(executionResult)
 			return
 		}
-		log.Printf("⚠️ Failed to get real execution result for %s: %v", runID, err)
+		log.Printf("⚠️ Failed to get real execution result for %s (real ID: %s): %v", runID, realExecutionRunID, err)
 	}
 
 	// Fallback: Check if the execution run exists in the database
 	if s.client != nil {
-		executionRun, err := s.client.GetExecutionRun(ctx, runID)
+		userID, err := s.getUserID(r)
+		if err != nil {
+			log.Printf("❌ Failed to get user ID for execution run lookup: %v", err)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		executionRun, err := s.client.GetExecutionRun(context.Background(), userID, realExecutionRunID)
 		if err == nil && executionRun != nil {
 			log.Printf("📋 Found execution run but no detailed results, creating mock data based on real run")
 			mockResult := s.createMockExecutionResult(executionRun)
@@ -692,7 +759,13 @@ func (s *Server) executionRunsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get real execution runs from database
 	ctx := context.Background()
-	executionRuns, err := s.client.ListExecutionRuns(ctx, limit, offset)
+	userID, err := s.getUserID(r)
+	if err != nil {
+		log.Printf("❌ Failed to get user ID for execution runs listing: %v", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	executionRuns, err := s.client.ListExecutionRuns(ctx, userID, limit, offset)
 	if err != nil {
 		log.Printf("Failed to list execution runs: %v", err)
 		// Fall back to mock data if database fails
@@ -766,10 +839,16 @@ func (s *Server) databaseTableDataHandler(w http.ResponseWriter, r *http.Request
 	var tableData interface{}
 
 	if s.client != nil {
+		userID, err := s.getUserID(r)
+		if err != nil {
+			log.Printf("❌ Failed to get user ID for database table data lookup: %v", err)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		switch tableName {
 		case "execution_runs":
 			// Query real execution runs from database
-			runs, err := s.client.ListExecutionRuns(context.Background(), int32(limit), int32(offset))
+			runs, err := s.client.ListExecutionRuns(context.Background(), userID, int32(limit), int32(offset))
 			if err != nil {
 				log.Printf("Error querying execution_runs: %v", err)
 				http.Error(w, "Database query failed", http.StatusInternalServerError)
@@ -796,60 +875,251 @@ func (s *Server) databaseTableDataHandler(w http.ResponseWriter, r *http.Request
 			}
 
 		case "api_configurations":
-			// For now, return placeholder data for api_configurations
+			// Query real API configurations for user's execution runs
+			query := `
+				SELECT ac.id, ac.execution_run_id, ac.variation_name, ac.model_name, 
+				       ac.system_prompt, ac.temperature, ac.max_tokens, ac.top_p, ac.top_k, ac.created_at
+				FROM api_configurations ac
+				INNER JOIN execution_runs er ON ac.execution_run_id = er.id
+				WHERE er.user_id = ?
+				ORDER BY ac.created_at DESC
+				LIMIT ?
+			`
+
+			dbRows, err := s.client.GetDB().QueryContext(context.Background(), query, userID, limit)
+			if err != nil {
+				log.Printf("Error querying api_configurations: %v", err)
+				http.Error(w, "Database query failed", http.StatusInternalServerError)
+				return
+			}
+			defer dbRows.Close()
+
+			var rows [][]interface{}
+			for dbRows.Next() {
+				var id, executionRunID, variationName, modelName, systemPrompt string
+				var temperature, topP sql.NullFloat64
+				var maxTokens, topK sql.NullInt32
+				var createdAt time.Time
+
+				err := dbRows.Scan(&id, &executionRunID, &variationName, &modelName,
+					&systemPrompt, &temperature, &maxTokens, &topP, &topK, &createdAt)
+				if err != nil {
+					log.Printf("Error scanning api_configurations row: %v", err)
+					continue
+				}
+
+				// Format nullable values
+				tempStr := ""
+				if temperature.Valid {
+					tempStr = fmt.Sprintf("%.2f", temperature.Float64)
+				}
+				maxTokensStr := ""
+				if maxTokens.Valid {
+					maxTokensStr = fmt.Sprintf("%d", maxTokens.Int32)
+				}
+				topPStr := ""
+				if topP.Valid {
+					topPStr = fmt.Sprintf("%.2f", topP.Float64)
+				}
+				topKStr := ""
+				if topK.Valid {
+					topKStr = fmt.Sprintf("%d", topK.Int32)
+				}
+
+				row := []interface{}{
+					id, executionRunID, variationName, modelName, systemPrompt,
+					tempStr, maxTokensStr, topPStr, topKStr, createdAt.Format(time.RFC3339),
+				}
+				rows = append(rows, row)
+			}
+
 			tableData = map[string]interface{}{
 				"tableName": "api_configurations",
 				"columns":   []string{"id", "execution_run_id", "variation_name", "model_name", "system_prompt", "temperature", "max_tokens", "top_p", "top_k", "created_at"},
-				"rows": [][]interface{}{
-					{"config-1", "run-1", "Conservative", "gemini-1.5-flash", "You are a precise assistant", "0.2", 100, "0.8", 10, time.Now().Format(time.RFC3339)},
-				},
-				"totalRows": 1,
+				"rows":      rows,
+				"totalRows": len(rows),
 			}
 
 		case "api_requests":
-			// For now, return placeholder data for api_requests
+			// Query real API requests for user's execution runs
+			query := `
+				SELECT ar.id, ar.execution_run_id, ar.configuration_id, ar.request_type, 
+				       ar.prompt, ar.context, ar.function_name, ar.created_at
+				FROM api_requests ar
+				INNER JOIN execution_runs er ON ar.execution_run_id = er.id
+				WHERE er.user_id = ?
+				ORDER BY ar.created_at DESC
+				LIMIT ?
+			`
+
+			dbRows, err := s.client.GetDB().QueryContext(context.Background(), query, userID, limit)
+			if err != nil {
+				log.Printf("Error querying api_requests: %v", err)
+				http.Error(w, "Database query failed", http.StatusInternalServerError)
+				return
+			}
+			defer dbRows.Close()
+
+			var rows [][]interface{}
+			for dbRows.Next() {
+				var id, executionRunID, configurationID, requestType, prompt string
+				var context, functionName sql.NullString
+				var createdAt time.Time
+
+				err := dbRows.Scan(&id, &executionRunID, &configurationID, &requestType,
+					&prompt, &context, &functionName, &createdAt)
+				if err != nil {
+					log.Printf("Error scanning api_requests row: %v", err)
+					continue
+				}
+
+				// Format nullable values
+				contextStr := ""
+				if context.Valid {
+					contextStr = context.String
+					if len(contextStr) > 100 {
+						contextStr = contextStr[:100] + "..."
+					}
+				}
+				functionNameStr := ""
+				if functionName.Valid {
+					functionNameStr = functionName.String
+				}
+
+				// Truncate long prompts for display
+				promptDisplay := prompt
+				if len(promptDisplay) > 100 {
+					promptDisplay = promptDisplay[:100] + "..."
+				}
+
+				row := []interface{}{
+					id, executionRunID, configurationID, requestType,
+					promptDisplay, contextStr, functionNameStr, createdAt.Format(time.RFC3339),
+				}
+				rows = append(rows, row)
+			}
+
 			tableData = map[string]interface{}{
 				"tableName": "api_requests",
 				"columns":   []string{"id", "execution_run_id", "configuration_id", "request_type", "prompt", "context", "function_name", "created_at"},
-				"rows": [][]interface{}{
-					{"req-1", "run-1", "config-1", "generate", "Hello", "Test context", "", time.Now().Format(time.RFC3339)},
-				},
-				"totalRows": 1,
+				"rows":      rows,
+				"totalRows": len(rows),
 			}
 
 		case "api_responses":
-			// For now, return placeholder data for api_responses
+			// Query real API responses for user's requests
+			query := `
+				SELECT resp.id, resp.request_id, resp.response_status, resp.response_text, 
+				       resp.finish_reason, resp.error_message, resp.response_time_ms, 
+				       resp.usage_metadata, resp.created_at
+				FROM api_responses resp
+				INNER JOIN api_requests req ON resp.request_id = req.id
+				INNER JOIN execution_runs er ON req.execution_run_id = er.id
+				WHERE er.user_id = ?
+				ORDER BY resp.created_at DESC
+				LIMIT ?
+			`
+
+			dbRows, err := s.client.GetDB().QueryContext(context.Background(), query, userID, limit)
+			if err != nil {
+				log.Printf("Error querying api_responses: %v", err)
+				http.Error(w, "Database query failed", http.StatusInternalServerError)
+				return
+			}
+			defer dbRows.Close()
+
+			var rows [][]interface{}
+			for dbRows.Next() {
+				var id, requestID, responseStatus, responseText string
+				var finishReason, errorMessage sql.NullString
+				var responseTimeMs sql.NullInt32
+				var usageMetadata []byte
+				var createdAt time.Time
+
+				err := dbRows.Scan(&id, &requestID, &responseStatus, &responseText,
+					&finishReason, &errorMessage, &responseTimeMs, &usageMetadata, &createdAt)
+				if err != nil {
+					log.Printf("Error scanning api_responses row: %v", err)
+					continue
+				}
+
+				// Format nullable values
+				finishReasonStr := ""
+				if finishReason.Valid {
+					finishReasonStr = finishReason.String
+				}
+				errorMessageStr := ""
+				if errorMessage.Valid {
+					errorMessageStr = errorMessage.String
+				}
+				responseTimeStr := ""
+				if responseTimeMs.Valid {
+					responseTimeStr = fmt.Sprintf("%d ms", responseTimeMs.Int32)
+				}
+
+				// Truncate long response text for display
+				responseDisplay := responseText
+				if len(responseDisplay) > 100 {
+					responseDisplay = responseDisplay[:100] + "..."
+				}
+
+				// Truncate usage metadata for display
+				usageStr := string(usageMetadata)
+				if len(usageStr) > 100 {
+					usageStr = usageStr[:100] + "..."
+				}
+
+				row := []interface{}{
+					id, requestID, responseStatus, responseDisplay, finishReasonStr,
+					errorMessageStr, responseTimeStr, usageStr, createdAt.Format(time.RFC3339),
+				}
+				rows = append(rows, row)
+			}
+
 			tableData = map[string]interface{}{
 				"tableName": "api_responses",
 				"columns":   []string{"id", "request_id", "response_status", "response_text", "finish_reason", "error_message", "response_time_ms", "usage_metadata", "created_at"},
-				"rows": [][]interface{}{
-					{"resp-1", "req-1", "success", "Hello! How can I help you?", "stop", "", 450, "{}", time.Now().Format(time.RFC3339)},
-				},
-				"totalRows": 1,
+				"rows":      rows,
+				"totalRows": len(rows),
 			}
 
 		case "comparison_results":
-			// Get real comparison results data
-			comparisonResults, err := s.client.ListComparisonResults(context.Background())
+			// Query real comparison results for user's execution runs
+			query := `
+				SELECT cr.id, cr.execution_run_id, cr.comparison_type, cr.metric_name, 
+				       cr.best_configuration_id, cr.created_at
+				FROM comparison_results cr
+				INNER JOIN execution_runs er ON cr.execution_run_id = er.id
+				WHERE er.user_id = ?
+				ORDER BY cr.created_at DESC
+				LIMIT ?
+			`
+
+			dbRows, err := s.client.GetDB().QueryContext(context.Background(), query, userID, limit)
 			if err != nil {
 				log.Printf("Error querying comparison_results: %v", err)
 				http.Error(w, "Database query failed", http.StatusInternalServerError)
 				return
 			}
+			defer dbRows.Close()
 
-			// Convert to table format
-			rows := make([][]interface{}, len(comparisonResults))
-			for i, comp := range comparisonResults {
-				createdAtStr := comp.CreatedAt.Format(time.RFC3339)
+			var rows [][]interface{}
+			for dbRows.Next() {
+				var id, executionRunID, comparisonType, metricName, bestConfigurationID string
+				var createdAt time.Time
 
-				rows[i] = []interface{}{
-					comp.ID,
-					comp.ExecutionRunID,
-					comp.ComparisonType,
-					comp.MetricName,
-					comp.BestConfigurationID,
-					createdAtStr,
+				err := dbRows.Scan(&id, &executionRunID, &comparisonType, &metricName,
+					&bestConfigurationID, &createdAt)
+				if err != nil {
+					log.Printf("Error scanning comparison_results row: %v", err)
+					continue
 				}
+
+				row := []interface{}{
+					id, executionRunID, comparisonType, metricName,
+					bestConfigurationID, createdAt.Format(time.RFC3339),
+				}
+				rows = append(rows, row)
 			}
 
 			tableData = map[string]interface{}{
@@ -860,17 +1130,20 @@ func (s *Server) databaseTableDataHandler(w http.ResponseWriter, r *http.Request
 			}
 
 		case "function_calls":
-			// Query function calls directly from database
+			// Query function calls for user's execution runs
 			query := `
 				SELECT fc.id, fc.request_id, fc.function_name, fc.function_arguments, 
 				       fc.function_response, fc.execution_status, fc.execution_time_ms, 
 				       fc.error_details, fc.created_at
 				FROM function_calls fc 
+				INNER JOIN api_requests req ON fc.request_id = req.id
+				INNER JOIN execution_runs er ON req.execution_run_id = er.id
+				WHERE er.user_id = ?
 				ORDER BY fc.created_at DESC 
 				LIMIT ?
 			`
 
-			dbRows, err := s.client.GetDB().QueryContext(context.Background(), query, limit)
+			dbRows, err := s.client.GetDB().QueryContext(context.Background(), query, userID, limit)
 			if err != nil {
 				log.Printf("Error querying function_calls: %v", err)
 				http.Error(w, "Database query failed", http.StatusInternalServerError)
@@ -991,18 +1264,124 @@ func (s *Server) databaseStatsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mock database statistics
-	stats := map[string]interface{}{
-		"totalExecutionRuns": 25,
-		"totalApiRequests":   156,
-		"totalApiResponses":  156,
-		"totalFunctionCalls": 8,
-		"avgResponseTime":    450.5,
-		"successRate":        0.94,
+	// Get user ID for scoping data
+	userID, err := s.getUserID(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Get real user-scoped statistics from database
+	stats, err := s.getUserDatabaseStats(ctx, userID)
+	if err != nil {
+		log.Printf("❌ Failed to get user database stats: %v", err)
+		// Fallback to empty stats if database query fails
+		stats = map[string]interface{}{
+			"totalExecutionRuns": 0,
+			"totalApiRequests":   0,
+			"totalApiResponses":  0,
+			"totalFunctionCalls": 0,
+			"avgResponseTime":    0.0,
+			"successRate":        0.0,
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+// getUserDatabaseStats gets user-specific database statistics
+func (s *Server) getUserDatabaseStats(ctx context.Context, userID string) (map[string]interface{}, error) {
+	db := s.client.GetDB()
+
+	// Count execution runs for this user
+	var totalExecutionRuns int32
+	err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(COUNT(*), 0) FROM execution_runs 
+		WHERE user_id = ?
+	`, userID).Scan(&totalExecutionRuns)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to count execution runs: %w", err)
+	}
+
+	// Count API requests for this user's execution runs
+	var totalApiRequests int32
+	err = db.QueryRowContext(ctx, `
+		SELECT COALESCE(COUNT(*), 0) FROM api_requests ar 
+		INNER JOIN execution_runs er ON ar.execution_run_id = er.id 
+		WHERE er.user_id = ?
+	`, userID).Scan(&totalApiRequests)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to count API requests: %w", err)
+	}
+
+	// Count API responses for this user's requests
+	var totalApiResponses int32
+	err = db.QueryRowContext(ctx, `
+		SELECT COALESCE(COUNT(*), 0) FROM api_responses resp 
+		INNER JOIN api_requests req ON resp.request_id = req.id 
+		INNER JOIN execution_runs er ON req.execution_run_id = er.id 
+		WHERE er.user_id = ?
+	`, userID).Scan(&totalApiResponses)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to count API responses: %w", err)
+	}
+
+	// Count function calls for this user's execution runs
+	var totalFunctionCalls int32
+	err = db.QueryRowContext(ctx, `
+		SELECT COALESCE(COUNT(*), 0) FROM function_calls fc 
+		INNER JOIN api_requests ar ON fc.request_id = ar.id
+		INNER JOIN execution_runs er ON ar.execution_run_id = er.id 
+		WHERE er.user_id = ?
+	`, userID).Scan(&totalFunctionCalls)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to count function calls: %w", err)
+	}
+
+	// Calculate average response time for this user
+	var avgResponseTime float64
+	err = db.QueryRowContext(ctx, `
+		SELECT COALESCE(AVG(resp.response_time_ms), 0) FROM api_responses resp 
+		INNER JOIN api_requests req ON resp.request_id = req.id 
+		INNER JOIN execution_runs er ON req.execution_run_id = er.id 
+		WHERE er.user_id = ? AND resp.response_time_ms IS NOT NULL
+	`, userID).Scan(&avgResponseTime)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to calculate average response time: %w", err)
+	}
+
+	// Calculate success rate for this user
+	var successRate float64
+	var successCount, totalCount int
+
+	err = db.QueryRowContext(ctx, `
+		SELECT 
+			COALESCE(SUM(CASE WHEN resp.response_status = 'success' THEN 1 ELSE 0 END), 0) as success_count,
+			COALESCE(COUNT(*), 0) as total_count
+		FROM api_responses resp 
+		INNER JOIN api_requests req ON resp.request_id = req.id 
+		INNER JOIN execution_runs er ON req.execution_run_id = er.id 
+		WHERE er.user_id = ?
+	`, userID).Scan(&successCount, &totalCount)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to calculate success rate: %w", err)
+	}
+
+	if totalCount > 0 {
+		successRate = float64(successCount) / float64(totalCount)
+	}
+
+	return map[string]interface{}{
+		"totalExecutionRuns": totalExecutionRuns,
+		"totalApiRequests":   totalApiRequests,
+		"totalApiResponses":  totalApiResponses,
+		"totalFunctionCalls": totalFunctionCalls,
+		"avgResponseTime":    avgResponseTime,
+		"successRate":        successRate,
+	}, nil
 }
 
 // Database tables endpoint
@@ -1052,24 +1431,42 @@ func runServer() {
 	}
 	defer server.Close()
 
-	// Set up routes
+	// Auth middleware for protected routes
+	authMiddleware := auth.AuthMiddleware(server.authService)
+
+	// Set up routes - public endpoints
 	http.HandleFunc("/health", server.enableCORS(server.healthHandler))
-	http.HandleFunc("/api/execute", server.enableCORS(server.executeHandler))
-	http.HandleFunc("/api/execution-runs/", server.enableCORS(server.executionRunsHandler))          // Note the trailing slash
-	http.HandleFunc("/api/execution-runs/status/", server.enableCORS(server.executionStatusHandler)) // Status endpoint
-	http.HandleFunc("/api/execution-runs", server.enableCORS(server.executionRunsHandler))
+	http.HandleFunc("/test", server.enableCORS(server.testHandler))
 
-	// Function management endpoints
-	http.HandleFunc("/api/functions", server.enableCORS(server.functionsHandler))
-	http.HandleFunc("/api/functions/", server.enableCORS(server.functionByIDHandler))
-	http.HandleFunc("/api/functions/test/", server.enableCORS(server.testFunctionHandler))
+	// Auth endpoints
+	http.HandleFunc("/api/auth/register", server.enableCORS(server.authHandlers.RegisterHandler))
+	http.HandleFunc("/api/auth/login", server.enableCORS(server.authHandlers.LoginHandler))
+	http.HandleFunc("/api/auth/temp-user", server.enableCORS(server.authHandlers.CreateTemporaryUserHandler))
+	http.HandleFunc("/api/auth/verify-email", server.enableCORS(server.authHandlers.VerifyEmailHandler))
 
-	// Configuration management endpoints
-	http.HandleFunc("/api/configurations", server.enableCORS(server.configurationsHandler))
+	// Protected auth endpoints
+	http.HandleFunc("/api/auth/current", server.enableCORS(authMiddleware(server.authHandlers.GetCurrentUserHandler)))
+	http.HandleFunc("/api/auth/save-temp", server.enableCORS(authMiddleware(server.authHandlers.SaveTemporaryAccountHandler)))
+	http.HandleFunc("/api/auth/connect-temp-account", server.enableCORS(authMiddleware(server.authHandlers.ConnectTemporaryAccountHandler)))
 
-	http.HandleFunc("/api/database/stats", server.enableCORS(server.databaseStatsHandler))
-	http.HandleFunc("/api/database/tables/", server.enableCORS(server.databaseTableDataHandler)) // Specific table data
-	http.HandleFunc("/api/database/tables", server.enableCORS(server.databaseTablesHandler))     // List tables
+	// Protected data endpoints - require authentication
+	http.HandleFunc("/api/execute", server.enableCORS(authMiddleware(server.executeHandler)))
+	http.HandleFunc("/api/execution-runs/", server.enableCORS(authMiddleware(server.executionRunsHandler)))          // Note the trailing slash
+	http.HandleFunc("/api/execution-runs/status/", server.enableCORS(authMiddleware(server.executionStatusHandler))) // Status endpoint
+	http.HandleFunc("/api/execution-runs", server.enableCORS(authMiddleware(server.executionRunsHandler)))
+
+	// Protected function management endpoints
+	http.HandleFunc("/api/functions", server.enableCORS(authMiddleware(server.functionsHandler)))
+	http.HandleFunc("/api/functions/", server.enableCORS(authMiddleware(server.functionByIDHandler)))
+	http.HandleFunc("/api/functions/test/", server.enableCORS(authMiddleware(server.testFunctionHandler)))
+
+	// Protected configuration management endpoints
+	http.HandleFunc("/api/configurations", server.enableCORS(authMiddleware(server.configurationsHandler)))
+
+	// Protected database endpoints
+	http.HandleFunc("/api/database/stats", server.enableCORS(authMiddleware(server.databaseStatsHandler)))
+	http.HandleFunc("/api/database/tables/", server.enableCORS(authMiddleware(server.databaseTableDataHandler))) // Specific table data
+	http.HandleFunc("/api/database/tables", server.enableCORS(authMiddleware(server.databaseTablesHandler)))     // List tables
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -1079,19 +1476,23 @@ func runServer() {
 	fmt.Printf("🚀 GoGent HTTP Server starting on port %s\n", port)
 	fmt.Printf("📡 Health check: http://localhost:%s/health\n", port)
 	fmt.Printf("🔧 API endpoints:\n")
-	fmt.Printf("   POST /api/execute - Multi-variation execution\n")
-	fmt.Printf("   GET  /api/execution-runs - Execution history\n")
-	fmt.Printf("   GET  /api/configurations - List API configurations\n")
-	fmt.Printf("   GET  /api/functions - List function definitions\n")
-	fmt.Printf("   POST /api/functions - Create function definition\n")
-	fmt.Printf("   GET  /api/functions/{id} - Get function by ID\n")
-	fmt.Printf("   PUT  /api/functions/{id} - Update function\n")
-	fmt.Printf("   DELETE /api/functions/{id} - Delete function\n")
-	fmt.Printf("   POST /api/functions/test/{id} - Test function execution\n")
-	fmt.Printf("   GET  /api/database/stats - Database statistics\n")
-	fmt.Printf("   GET  /api/database/tables - Database tables\n")
+	fmt.Printf("   POST /api/execute - Multi-variation execution (🔐 Protected)\n")
+	fmt.Printf("   GET  /api/execution-runs - Execution history (🔐 Protected)\n")
+	fmt.Printf("   POST /api/auth/register - User registration\n")
+	fmt.Printf("   POST /api/auth/login - User login\n")
+	fmt.Printf("   GET  /api/auth/current - Get current user (🔐 Protected)\n")
+	fmt.Printf("   GET  /api/configurations - List API configurations (🔐 Protected)\n")
+	fmt.Printf("   GET  /api/functions - List function definitions (🔐 Protected)\n")
+	fmt.Printf("   POST /api/functions - Create function definition (🔐 Protected)\n")
+	fmt.Printf("   GET  /api/functions/{id} - Get function by ID (🔐 Protected)\n")
+	fmt.Printf("   PUT  /api/functions/{id} - Update function (🔐 Protected)\n")
+	fmt.Printf("   DELETE /api/functions/{id} - Delete function (🔐 Protected)\n")
+	fmt.Printf("   POST /api/functions/test/{id} - Test function execution (🔐 Protected)\n")
+	fmt.Printf("   GET  /api/database/stats - Database statistics (🔐 Protected)\n")
+	fmt.Printf("   GET  /api/database/tables - Database tables (🔐 Protected)\n")
 	fmt.Printf("💡 Use X-Use-Mock: true header for mock responses\n")
 	fmt.Printf("🔑 Set GEMINI_API_KEY in config.env for real API calls\n")
+	fmt.Printf("🔐 Most endpoints now require authentication\n")
 	fmt.Println()
 
 	log.Fatal(http.ListenAndServe(":"+port, nil))
@@ -1251,6 +1652,11 @@ func (s *Server) testFunctionHandler(w http.ResponseWriter, r *http.Request) {
 
 // listFunctions returns all active function definitions
 func (s *Server) listFunctions(w http.ResponseWriter, r *http.Request) {
+	userID, err := s.getUserID(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	log.Printf("📋 Listing function definitions from database")
 
 	if s.client == nil {
@@ -1267,11 +1673,11 @@ func (s *Server) listFunctions(w http.ResponseWriter, r *http.Request) {
 		       mock_response, endpoint_url, http_method, headers, auth_config,
 		       is_active, created_at, updated_at
 		FROM function_definitions
-		WHERE is_active = true
+		WHERE (user_id = ? OR user_id = 'system') AND is_active = true
 		ORDER BY display_name ASC
 	`
 
-	rows, err := s.client.GetDB().QueryContext(ctx, query)
+	rows, err := s.client.GetDB().QueryContext(ctx, query, userID)
 	if err != nil {
 		log.Printf("❌ Failed to query function definitions: %v", err)
 		http.Error(w, "Failed to query functions", http.StatusInternalServerError)

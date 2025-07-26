@@ -65,7 +65,7 @@ func (g *GRPCGateway) Close() error {
 // Health check endpoint
 func (g *GRPCGateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
-	
+
 	req := &pb.HealthRequest{}
 	resp, err := g.grpcClient.Health(ctx, req)
 	if err != nil {
@@ -107,11 +107,27 @@ func (g *GRPCGateway) executeHandler(w http.ResponseWriter, r *http.Request) {
 		Context:               getStringFromMap(httpReq, "context"),
 		EnableFunctionCalling: getBoolFromMap(httpReq, "enableFunctionCalling"),
 		UseMock:               r.Header.Get("X-Use-Mock") == "true",
-		OpenweatherApiKey:     r.Header.Get("X-OpenWeather-API-Key"),
-		Neo4JUrl:              r.Header.Get("X-Neo4j-URL"),
-		Neo4JUsername:         r.Header.Get("X-Neo4j-Username"),
-		Neo4JPassword:         r.Header.Get("X-Neo4j-Password"),
-		Neo4JDatabase:         r.Header.Get("X-Neo4j-Database"),
+		SessionApiKeys:        make(map[string]string),
+	}
+
+	// Collect all API keys from headers into session_api_keys map
+	if geminiKey := r.Header.Get("X-Gemini-API-Key"); geminiKey != "" {
+		grpcReq.SessionApiKeys["geminiApiKey"] = geminiKey
+	}
+	if openWeatherKey := r.Header.Get("X-OpenWeather-API-Key"); openWeatherKey != "" {
+		grpcReq.SessionApiKeys["openWeatherApiKey"] = openWeatherKey
+	}
+	if neo4jUrl := r.Header.Get("X-Neo4j-URL"); neo4jUrl != "" {
+		grpcReq.SessionApiKeys["neo4jUrl"] = neo4jUrl
+	}
+	if neo4jUsername := r.Header.Get("X-Neo4j-Username"); neo4jUsername != "" {
+		grpcReq.SessionApiKeys["neo4jUsername"] = neo4jUsername
+	}
+	if neo4jPassword := r.Header.Get("X-Neo4j-Password"); neo4jPassword != "" {
+		grpcReq.SessionApiKeys["neo4jPassword"] = neo4jPassword
+	}
+	if neo4jDatabase := r.Header.Get("X-Neo4j-Database"); neo4jDatabase != "" {
+		grpcReq.SessionApiKeys["neo4jDatabase"] = neo4jDatabase
 	}
 
 	// Convert configurations
@@ -462,12 +478,12 @@ func convertExecutionResultToMap(result *pb.ExecutionResult) map[string]interfac
 	// Convert comparison if available
 	if result.Comparison != nil {
 		resultMap["comparison"] = map[string]interface{}{
-			"id":                   result.Comparison.Id,
-			"executionRunId":       result.Comparison.ExecutionRunId,
-			"comparisonType":       result.Comparison.ComparisonType,
-			"metricName":           result.Comparison.MetricName,
-			"bestConfigurationId":  result.Comparison.BestConfigurationId,
-			"analysisNotes":        result.Comparison.AnalysisNotes,
+			"id":                  result.Comparison.Id,
+			"executionRunId":      result.Comparison.ExecutionRunId,
+			"comparisonType":      result.Comparison.ComparisonType,
+			"metricName":          result.Comparison.MetricName,
+			"bestConfigurationId": result.Comparison.BestConfigurationId,
+			"analysisNotes":       result.Comparison.AnalysisNotes,
 		}
 	}
 
@@ -502,4 +518,4 @@ func runGRPCGateway() {
 	fmt.Println()
 
 	log.Fatal(http.ListenAndServe(":"+port, nil))
-} 
+}

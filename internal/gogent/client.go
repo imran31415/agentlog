@@ -21,6 +21,9 @@ import (
 	"gogent/internal/types"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/mysql"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
@@ -49,17 +52,21 @@ func NewClient(dbURL string, config *types.GeminiClientConfig) (*Client, error) 
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Run database migrations
-	migrationManager := db.NewMigrationManager(database)
-	migrationsDir := "sql/migrations"
-	if err := migrationManager.RunMigrations(migrationsDir); err != nil {
-		log.Printf("⚠️ Warning: failed to run migrations: %v", err)
-		// Continue without migrations rather than failing completely
-	} else {
-		log.Printf("✅ Database migrations completed successfully")
+	queries := db.New(database)
+
+	// Create temporary client to run migrations
+	tempClient := &Client{
+		db:      database,
+		queries: queries,
+		config:  config,
+		mutex:   sync.RWMutex{},
 	}
 
-	queries := db.New(database)
+	// Run migrations using golang-migrate
+	if err := tempClient.RunMigrations(); err != nil {
+		log.Printf("⚠️ Warning: failed to run migrations: %v", err)
+		// Continue without migrations rather than failing completely
+	}
 
 	client := &Client{
 		db:      database,
@@ -100,7 +107,7 @@ func (c *Client) Close() error {
 }
 
 // CreateExecutionRun creates a new execution run for grouping related API calls
-func (c *Client) CreateExecutionRun(ctx context.Context, name, description string, enableFunctionCalling bool) (*types.ExecutionRun, error) {
+func (c *Client) CreateExecutionRun(ctx context.Context, userID, name, description string, enableFunctionCalling bool) (*types.ExecutionRun, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -108,6 +115,7 @@ func (c *Client) CreateExecutionRun(ctx context.Context, name, description strin
 	log.Printf("🔧 Creating execution run with enableFunctionCalling: %v", enableFunctionCalling)
 	err := c.queries.CreateExecutionRun(ctx, db.CreateExecutionRunParams{
 		ID:                    id,
+		UserID:                userID,
 		Name:                  name,
 		Description:           sql.NullString{String: description, Valid: description != ""},
 		EnableFunctionCalling: enableFunctionCalling,
@@ -129,7 +137,7 @@ func (c *Client) CreateExecutionRun(ctx context.Context, name, description strin
 }
 
 // CreateAPIConfiguration creates a new API configuration for a variation
-func (c *Client) CreateAPIConfiguration(ctx context.Context, config *types.APIConfiguration) error {
+func (c *Client) CreateAPIConfiguration(ctx context.Context, userID string, config *types.APIConfiguration) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -140,6 +148,7 @@ func (c *Client) CreateAPIConfiguration(ctx context.Context, config *types.APICo
 
 	return c.queries.CreateAPIConfiguration(ctx, db.CreateAPIConfigurationParams{
 		ID:               config.ID,
+		UserID:           userID,
 		ExecutionRunID:   config.ExecutionRunID,
 		VariationName:    config.VariationName,
 		ModelName:        config.ModelName,
@@ -156,7 +165,7 @@ func (c *Client) CreateAPIConfiguration(ctx context.Context, config *types.APICo
 }
 
 // LogAPIRequest logs an API request to the database
-func (c *Client) LogAPIRequest(ctx context.Context, request *types.APIRequest) error {
+func (c *Client) LogAPIRequest(ctx context.Context, userID string, request *types.APIRequest) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -166,6 +175,7 @@ func (c *Client) LogAPIRequest(ctx context.Context, request *types.APIRequest) e
 
 	return c.queries.CreateAPIRequest(ctx, db.CreateAPIRequestParams{
 		ID:                 request.ID,
+		UserID:             userID,
 		ExecutionRunID:     request.ExecutionRunID,
 		ConfigurationID:    request.ConfigurationID,
 		RequestType:        db.ApiRequestsRequestType(request.RequestType),
@@ -179,7 +189,7 @@ func (c *Client) LogAPIRequest(ctx context.Context, request *types.APIRequest) e
 }
 
 // LogAPIResponse logs an API response to the database
-func (c *Client) LogAPIResponse(ctx context.Context, response *types.APIResponse) error {
+func (c *Client) LogAPIResponse(ctx context.Context, userID string, response *types.APIResponse) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -191,6 +201,7 @@ func (c *Client) LogAPIResponse(ctx context.Context, response *types.APIResponse
 
 	return c.queries.CreateAPIResponse(ctx, db.CreateAPIResponseParams{
 		ID:                   response.ID,
+		UserID:               userID,
 		RequestID:            response.RequestID,
 		ResponseStatus:       db.ApiResponsesResponseStatus(response.ResponseStatus),
 		ResponseText:         sql.NullString{String: response.ResponseText, Valid: response.ResponseText != ""},
@@ -206,9 +217,9 @@ func (c *Client) LogAPIResponse(ctx context.Context, response *types.APIResponse
 }
 
 // ExecuteMultiVariation executes the same prompt with multiple configurations
-func (c *Client) ExecuteMultiVariation(ctx context.Context, request *types.MultiExecutionRequest) (*types.ExecutionResult, error) {
+func (c *Client) ExecuteMultiVariation(ctx context.Context, userID string, request *types.MultiExecutionRequest) (*types.ExecutionResult, error) {
 	// Create execution run
-	executionRun, err := c.CreateExecutionRun(ctx, request.ExecutionRunName, request.Description, request.EnableFunctionCalling)
+	executionRun, err := c.CreateExecutionRun(ctx, userID, request.ExecutionRunName, request.Description, request.EnableFunctionCalling)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create execution run: %w", err)
 	}
@@ -262,7 +273,7 @@ func (c *Client) ExecuteMultiVariation(ctx context.Context, request *types.Multi
 		}
 
 		// Save configuration
-		if err := c.CreateAPIConfiguration(ctx, &config); err != nil {
+		if err := c.CreateAPIConfiguration(ctx, userID, &config); err != nil {
 			c.logExecutionEvent(types.LogLevelError, types.LogCategoryError,
 				fmt.Sprintf("Failed to save configuration: %v", err), nil)
 			return nil, fmt.Errorf("failed to save configuration: %w", err)
@@ -272,7 +283,7 @@ func (c *Client) ExecuteMultiVariation(ctx context.Context, request *types.Multi
 		c.logExecutionEvent(types.LogLevelInfo, types.LogCategoryExecution,
 			fmt.Sprintf("Executing variation: %s", config.VariationName), nil)
 
-		variationResult, err := c.executeSingleVariation(ctx, executionRun.ID, &config, request.BasePrompt, request.Context)
+		variationResult, err := c.executeSingleVariation(ctx, userID, executionRun.ID, &config, request.BasePrompt, request.Context)
 		if err != nil {
 			c.logExecutionEvent(types.LogLevelError, types.LogCategoryError,
 				fmt.Sprintf("Variation failed: %s - %v", config.VariationName, err), nil)
@@ -296,7 +307,7 @@ func (c *Client) ExecuteMultiVariation(ctx context.Context, request *types.Multi
 
 	// Store function-execution relationships for replay functionality
 	if request.EnableFunctionCalling && len(request.FunctionTools) > 0 {
-		err := c.storeFunctionExecutionConfigs(ctx, executionRun.ID, request.FunctionTools)
+		err := c.storeFunctionExecutionConfigs(ctx, userID, executionRun.ID, request.FunctionTools)
 		if err != nil {
 			c.logExecutionEvent(types.LogLevelWarn, types.LogCategoryError,
 				fmt.Sprintf("Failed to store function-execution configs: %v", err), nil)
@@ -331,7 +342,7 @@ func (c *Client) ExecuteMultiVariation(ctx context.Context, request *types.Multi
 		result.Comparison = comparison
 
 		// Store comparison result in database
-		if err := c.StoreComparisonResult(ctx, comparison); err != nil {
+		if err := c.StoreComparisonResult(ctx, userID, comparison); err != nil {
 			fmt.Printf("⚠️ Warning: failed to store comparison result: %v\n", err)
 		} else {
 			fmt.Printf("💾 Comparison result stored in database: %s\n", comparison.ID)
@@ -342,7 +353,7 @@ func (c *Client) ExecuteMultiVariation(ctx context.Context, request *types.Multi
 }
 
 // executeSingleVariation executes a single variation and logs everything
-func (c *Client) executeSingleVariation(ctx context.Context, executionRunID string, config *types.APIConfiguration, prompt, context string) (*types.VariationResult, error) {
+func (c *Client) executeSingleVariation(ctx context.Context, userID string, executionRunID string, config *types.APIConfiguration, prompt, context string) (*types.VariationResult, error) {
 	startTime := time.Now()
 
 	// Create API request
@@ -357,7 +368,7 @@ func (c *Client) executeSingleVariation(ctx context.Context, executionRunID stri
 	}
 
 	// Log request
-	if err := c.LogAPIRequest(ctx, apiRequest); err != nil {
+	if err := c.LogAPIRequest(ctx, userID, apiRequest); err != nil {
 		return nil, fmt.Errorf("failed to log API request: %w", err)
 	}
 
@@ -376,7 +387,7 @@ func (c *Client) executeSingleVariation(ctx context.Context, executionRunID stri
 	}
 
 	// Log response
-	if logErr := c.LogAPIResponse(ctx, apiResponse); logErr != nil {
+	if logErr := c.LogAPIResponse(ctx, userID, apiResponse); logErr != nil {
 		return nil, fmt.Errorf("failed to log API response: %w", logErr)
 	}
 
@@ -1164,6 +1175,11 @@ func (c *Client) compareResults(ctx context.Context, result *types.ExecutionResu
 	// Enhanced comparison implementation with multiple metrics
 	fmt.Printf("🔍 Comparing %d results for execution run: %s\n", len(result.Results), result.ExecutionRun.ID)
 
+	// Log all configuration IDs for debugging
+	for i, r := range result.Results {
+		fmt.Printf("🔧 Config %d: %s (ID: %s)\n", i+1, r.Configuration.VariationName, r.Configuration.ID)
+	}
+
 	comparisonResult := &types.ComparisonResult{
 		ID:             uuid.New().String(),
 		ExecutionRunID: result.ExecutionRun.ID,
@@ -1200,8 +1216,9 @@ func (c *Client) compareResults(ctx context.Context, result *types.ExecutionResu
 			bestScore = overallScore
 		}
 
-		// Store detailed scores
+		// Store detailed scores with configuration ID for easy matching
 		scores[r.Configuration.VariationName] = map[string]interface{}{
+			"configuration_id":    r.Configuration.ID,
 			"response_time_ms":    r.Response.ResponseTimeMs,
 			"status":              r.Response.ResponseStatus,
 			"response_time_score": responseTimeScore,
@@ -1214,6 +1231,14 @@ func (c *Client) compareResults(ctx context.Context, result *types.ExecutionResu
 			"temperature":         r.Configuration.Temperature,
 			"model_name":          r.Configuration.ModelName,
 		}
+
+		// Log detailed scoring for debugging
+		fmt.Printf("📊 Configuration %s (%s): Overall=%.2f, Time=%dms, Creativity=%.2f\n",
+			r.Configuration.VariationName,
+			r.Configuration.ID[:8],
+			overallScore*100,
+			r.Response.ResponseTimeMs,
+			creativityScore*100)
 	}
 
 	// Set best configuration and analysis notes
@@ -1221,8 +1246,12 @@ func (c *Client) compareResults(ctx context.Context, result *types.ExecutionResu
 		comparisonResult.BestConfigurationID = bestOverall.Configuration.ID
 		comparisonResult.BestConfiguration = &bestOverall.Configuration
 
+		// Log the best configuration ID for debugging
+		fmt.Printf("🏆 Best Configuration Selected: %s (ID: %s)\n", bestOverall.Configuration.VariationName, bestOverall.Configuration.ID)
+
 		// Create detailed analysis notes
-		analysis := fmt.Sprintf("🏆 Best Configuration: %s\n\n", bestOverall.Configuration.VariationName)
+		analysis := fmt.Sprintf("🏆 Best Configuration: %s\n", bestOverall.Configuration.VariationName)
+		analysis += fmt.Sprintf("📋 Configuration ID: %s\n\n", bestOverall.Configuration.ID)
 		analysis += fmt.Sprintf("📊 Overall Score: %.2f/100\n", bestScore*100)
 		analysis += fmt.Sprintf("⚡ Response Time: %dms\n", bestOverall.Response.ResponseTimeMs)
 		analysis += fmt.Sprintf("🎨 Creativity Score: %.1f/100\n", getScoreFromMap(scores, bestOverall.Configuration.VariationName, "creativity_score")*100)
@@ -1457,7 +1486,7 @@ func findMostCreative(scores map[string]interface{}) string {
 }
 
 // StoreComparisonResult stores a comparison result in the database
-func (c *Client) StoreComparisonResult(ctx context.Context, comparison *types.ComparisonResult) error {
+func (c *Client) StoreComparisonResult(ctx context.Context, userID string, comparison *types.ComparisonResult) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -1660,11 +1689,14 @@ func convertStringToRawMessage(jsonStr string) json.RawMessage {
 }
 
 // ListExecutionRuns retrieves execution runs from the database with pagination
-func (c *Client) ListExecutionRuns(ctx context.Context, limit, offset int32) ([]*types.ExecutionRun, error) {
+func (c *Client) ListExecutionRuns(ctx context.Context, userID string, limit, offset int32) ([]*types.ExecutionRun, error) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
-	rows, err := c.queries.GetRecentExecutionRuns(ctx, limit)
+	rows, err := c.queries.GetRecentExecutionRuns(ctx, db.GetRecentExecutionRunsParams{
+		UserID: userID,
+		Limit:  limit,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list execution runs: %w", err)
 	}
@@ -1693,11 +1725,14 @@ func (c *Client) ListExecutionRuns(ctx context.Context, limit, offset int32) ([]
 }
 
 // GetExecutionRun retrieves a single execution run by ID
-func (c *Client) GetExecutionRun(ctx context.Context, id string) (*types.ExecutionRun, error) {
+func (c *Client) GetExecutionRun(ctx context.Context, userID string, id string) (*types.ExecutionRun, error) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
-	row, err := c.queries.GetExecutionRun(ctx, id)
+	row, err := c.queries.GetExecutionRun(ctx, db.GetExecutionRunParams{
+		ID:     id,
+		UserID: userID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution run: %w", err)
 	}
@@ -1720,18 +1755,21 @@ func (c *Client) GetExecutionRun(ctx context.Context, id string) (*types.Executi
 }
 
 // GetExecutionResult retrieves complete execution details from the database
-func (c *Client) GetExecutionResult(ctx context.Context, executionRunID string) (*types.ExecutionResult, error) {
+func (c *Client) GetExecutionResult(ctx context.Context, userID string, executionRunID string) (*types.ExecutionResult, error) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
 	// Get the execution run
-	executionRun, err := c.GetExecutionRun(ctx, executionRunID)
+	executionRun, err := c.GetExecutionRun(ctx, userID, executionRunID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution run: %w", err)
 	}
 
 	// Get all configurations for this execution run
-	configRows, err := c.queries.GetAPIConfigurationsByRun(ctx, executionRunID)
+	configRows, err := c.queries.GetAPIConfigurationsByRun(ctx, db.GetAPIConfigurationsByRunParams{
+		ExecutionRunID: executionRunID,
+		UserID:         userID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get configurations: %w", err)
 	}
@@ -1746,14 +1784,20 @@ func (c *Client) GetExecutionResult(ctx context.Context, executionRunID string) 
 	log.Printf("🔧 Found %d function configurations for execution run %s", len(functionConfigRows), executionRunID)
 
 	// Get all requests for this execution run
-	requestRows, err := c.queries.GetAPIRequestsByRun(ctx, executionRunID)
+	requestRows, err := c.queries.GetAPIRequestsByRun(ctx, db.GetAPIRequestsByRunParams{
+		ExecutionRunID: executionRunID,
+		UserID:         userID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get requests: %w", err)
 	}
 	log.Printf("📝 Found %d requests for execution run %s", len(requestRows), executionRunID)
 
 	// Get all responses with joined data for this execution run
-	responseRows, err := c.queries.GetAPIResponsesWithRequests(ctx, executionRunID)
+	responseRows, err := c.queries.GetAPIResponsesWithRequests(ctx, db.GetAPIResponsesWithRequestsParams{
+		ExecutionRunID: executionRunID,
+		UserID:         userID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get responses: %w", err)
 	}
@@ -1763,7 +1807,10 @@ func (c *Client) GetExecutionResult(ctx context.Context, executionRunID string) 
 	functionTools := make([]types.Tool, 0)
 	for _, funcConfig := range functionConfigRows {
 		// Get the full function definition
-		funcDef, err := c.queries.GetFunctionDefinition(ctx, funcConfig.FunctionDefinitionID)
+		funcDef, err := c.queries.GetFunctionDefinition(ctx, db.GetFunctionDefinitionParams{
+			ID:     funcConfig.FunctionDefinitionID,
+			UserID: userID,
+		})
 		if err != nil {
 			log.Printf("⚠️ Failed to get function definition %s: %v", funcConfig.FunctionDefinitionID, err)
 			continue
@@ -2000,13 +2047,16 @@ func (c *Client) GetDB() *sql.DB {
 }
 
 // storeFunctionExecutionConfigs stores the function-execution relationships for replay functionality
-func (c *Client) storeFunctionExecutionConfigs(ctx context.Context, executionRunID string, functionTools []types.Tool) error {
+func (c *Client) storeFunctionExecutionConfigs(ctx context.Context, userID string, executionRunID string, functionTools []types.Tool) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
 	for i, tool := range functionTools {
 		// Find the function definition by name
-		funcDef, err := c.queries.GetFunctionDefinitionByName(ctx, tool.Name)
+		funcDef, err := c.queries.GetFunctionDefinitionByName(ctx, db.GetFunctionDefinitionByNameParams{
+			Name:   tool.Name,
+			UserID: userID,
+		})
 		if err != nil {
 			log.Printf("⚠️ Function definition not found for tool %s: %v", tool.Name, err)
 			continue
@@ -2236,5 +2286,71 @@ func (c *Client) LogFunctionCall(ctx context.Context, call *types.FunctionCall) 
 	}
 
 	log.Printf("📊 Function call logged to database: %s", call.FunctionName)
+	return nil
+}
+
+// ListAPIConfigurationsByUser retrieves API configurations for a specific user
+func (c *Client) ListAPIConfigurationsByUser(ctx context.Context, userID string, limit, offset int32) ([]types.APIConfiguration, error) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	rows, err := c.queries.ListAPIConfigurations(ctx, db.ListAPIConfigurationsParams{
+		UserID: userID,
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var configs []types.APIConfiguration
+	for _, row := range rows {
+		cfg := types.APIConfiguration{
+			ID:             row.ID,
+			ExecutionRunID: row.ExecutionRunID,
+			VariationName:  row.VariationName,
+			ModelName:      row.ModelName,
+			SystemPrompt:   row.SystemPrompt.String,
+			CreatedAt:      row.CreatedAt.Time,
+		}
+		if row.Temperature.Valid {
+			temp, _ := parseFloat32(row.Temperature.String)
+			cfg.Temperature = &temp
+		}
+		configs = append(configs, cfg)
+	}
+	return configs, nil
+}
+
+// RunMigrations runs database migrations using golang-migrate
+func (c *Client) RunMigrations() error {
+	log.Println("🔧 Starting database migrations using golang-migrate...")
+
+	// Create the migrate driver instance
+	driver, err := mysql.WithInstance(c.db, &mysql.Config{})
+	if err != nil {
+		return fmt.Errorf("failed to create migrate driver: %w", err)
+	}
+
+	// Create migrate instance
+	m, err := migrate.NewWithDatabaseInstance(
+		"file://migrations", // path to migration files
+		"mysql",             // database name
+		driver,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create migrate instance: %w", err)
+	}
+
+	// Run migrations
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	if err == migrate.ErrNoChange {
+		log.Println("✅ No pending migrations found")
+	} else {
+		log.Println("✅ Database migrations completed successfully")
+	}
+
 	return nil
 }

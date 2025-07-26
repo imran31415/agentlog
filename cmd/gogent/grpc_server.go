@@ -27,7 +27,9 @@ type GRPCServer struct {
 
 // NewGRPCServer creates a new gRPC server
 func NewGRPCServer() (*GRPCServer, error) {
-	businessLogic, err := NewBusinessLogic()
+	// For gRPC operations, we'll use a system user ID since gRPC doesn't have JWT context
+	// In a real implementation, you'd extract user ID from gRPC metadata
+	businessLogic, err := NewBusinessLogic("system-user")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create business logic: %w", err)
 	}
@@ -133,35 +135,52 @@ func (s *GRPCServer) GetCurrentUser(ctx context.Context, req *pb.GetCurrentUserR
 // =============================================================================
 
 func (s *GRPCServer) Execute(ctx context.Context, req *pb.ExecuteRequest) (*pb.ExecuteResponse, error) {
-	// Convert proto request to internal types
-	multiReq := &types.MultiExecutionRequest{
-		ExecutionRunName:      req.ExecutionRunName,
-		Description:           req.Description,
-		BasePrompt:            req.BasePrompt,
-		Context:               req.Context,
-		EnableFunctionCalling: req.EnableFunctionCalling,
-		Configurations:        s.convertProtoConfigurations(req.Configurations),
+	// Convert protobuf request to internal type
+	request, err := s.convertProtoExecuteRequestToInternal(req)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "Invalid request: %v", err)
 	}
 
-	// Create additional config for external APIs
-	additionalConfig := &types.GeminiClientConfig{
-		OpenWeatherAPIKey: req.OpenweatherApiKey,
-		Neo4jURL:          req.Neo4JUrl,
-		Neo4jUsername:     req.Neo4JUsername,
-		Neo4jPassword:     req.Neo4JPassword,
-		Neo4jDatabase:     req.Neo4JDatabase,
+	// Extract session API keys from the request
+	sessionApiKeys := make(map[string]string)
+
+	// Use the new session_api_keys map if available
+	if sessionKeysMap := req.GetSessionApiKeys(); len(sessionKeysMap) > 0 {
+		for key, value := range sessionKeysMap {
+			sessionApiKeys[key] = value
+		}
+	} else {
+		// Fallback to legacy fields for backward compatibility
+		if req.GetOpenweatherApiKey() != "" {
+			sessionApiKeys["openWeatherApiKey"] = req.GetOpenweatherApiKey()
+		}
+		if req.GetNeo4JUrl() != "" {
+			sessionApiKeys["neo4jUrl"] = req.GetNeo4JUrl()
+		}
+		if req.GetNeo4JUsername() != "" {
+			sessionApiKeys["neo4jUsername"] = req.GetNeo4JUsername()
+		}
+		if req.GetNeo4JPassword() != "" {
+			sessionApiKeys["neo4jPassword"] = req.GetNeo4JPassword()
+		}
+		if req.GetNeo4JDatabase() != "" {
+			sessionApiKeys["neo4jDatabase"] = req.GetNeo4JDatabase()
+		}
 	}
 
-	executionID, executionRun, err := s.businessLogic.StartExecution(multiReq, req.UseMock, additionalConfig)
+	// Start execution with session API keys
+	executionID, executionRun, err := s.businessLogic.StartExecution(request, req.GetUseMock(), sessionApiKeys)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to start execution: %v", err)
 	}
 
+	// Convert to protobuf response
 	protoExecutionRun := s.convertExecutionRunToProto(executionRun)
+
 	return &pb.ExecuteResponse{
 		ExecutionId:  executionID,
-		Message:      "Execution started. Use GetExecutionStatus to check progress.",
 		ExecutionRun: protoExecutionRun,
+		Message:      fmt.Sprintf("Execution started: %s", executionRun.Name),
 	}, nil
 }
 
@@ -664,6 +683,53 @@ func (s *GRPCServer) convertExecutionResultToProto(result *types.ExecutionResult
 		TotalTime:    result.TotalTime,
 		SuccessCount: int32(result.SuccessCount),
 		ErrorCount:   int32(result.ErrorCount),
+	}, nil
+}
+
+// Helper function to convert proto execute request to internal type
+func (s *GRPCServer) convertProtoExecuteRequestToInternal(req *pb.ExecuteRequest) (*types.MultiExecutionRequest, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request cannot be nil")
+	}
+
+	// Convert configurations using existing method
+	configs := s.convertProtoConfigurations(req.Configurations)
+
+	// Convert function tools - simplified conversion
+	tools := make([]types.Tool, len(req.FunctionTools))
+	for i, protoTool := range req.FunctionTools {
+		// Convert protobuf Struct to map[string]interface{}
+		var parameters map[string]interface{}
+		if protoTool.Parameters != nil {
+			parameters = protoTool.Parameters.AsMap()
+		}
+
+		tools[i] = types.Tool{
+			Name:        protoTool.Name,
+			Description: protoTool.Description,
+			Parameters:  parameters,
+		}
+	}
+
+	// Convert comparison config
+	var comparisonConfig *types.ComparisonConfig
+	if req.ComparisonConfig != nil {
+		comparisonConfig = &types.ComparisonConfig{
+			Enabled:     req.ComparisonConfig.Enabled,
+			Metrics:     req.ComparisonConfig.Metrics,
+			CustomRules: req.ComparisonConfig.CustomRules,
+		}
+	}
+
+	return &types.MultiExecutionRequest{
+		ExecutionRunName:      req.ExecutionRunName,
+		Description:           req.Description,
+		BasePrompt:            req.BasePrompt,
+		Context:               req.Context,
+		EnableFunctionCalling: req.EnableFunctionCalling,
+		Configurations:        configs,
+		FunctionTools:         tools,
+		ComparisonConfig:      comparisonConfig,
 	}, nil
 }
 

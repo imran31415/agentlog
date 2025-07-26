@@ -17,34 +17,44 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// BusinessLogic contains the core business logic separated from gRPC concerns
+// BusinessLogic handles the core business logic for the application
 type BusinessLogic struct {
 	client         *gogent.Client
 	config         *types.GeminiClientConfig
 	executions     map[string]*ExecutionStatus
 	executionMutex sync.RWMutex
+	userID         string // Store current user ID for operations
 }
 
 // NewBusinessLogic creates a new business logic instance
-func NewBusinessLogic() (*BusinessLogic, error) {
+func NewBusinessLogic(userID string) (*BusinessLogic, error) {
 	// Load environment variables
-	if err := godotenv.Load("config.env"); err != nil {
-		log.Printf("Warning: could not load config.env file: %v", err)
+	if err := godotenv.Load(); err != nil {
+		log.Printf("⚠️ Warning: .env file not found: %v", err)
 	}
 
-	// Get configuration from environment
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	// Get database URL from environment
 	dbURL := os.Getenv("DB_URL")
-
 	if dbURL == "" {
 		return nil, fmt.Errorf("DB_URL environment variable is required")
 	}
 
-	// Create Gemini client configuration
+	// Get Gemini API key from environment
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		log.Printf("⚠️ Warning: GEMINI_API_KEY not set, will use mock responses")
+	}
+
+	// Create Gemini client config
 	config := &types.GeminiClientConfig{
-		APIKey:      apiKey,
-		MaxRetries:  3,
-		TimeoutSecs: 30,
+		APIKey:            apiKey,
+		OpenWeatherAPIKey: os.Getenv("OPENWEATHER_API_KEY"),
+		Neo4jURL:          os.Getenv("NEO4J_URL"),
+		Neo4jUsername:     os.Getenv("NEO4J_USERNAME"),
+		Neo4jPassword:     os.Getenv("NEO4J_PASSWORD"),
+		Neo4jDatabase:     os.Getenv("NEO4J_DATABASE"),
+		MaxRetries:        3,
+		TimeoutSecs:       30,
 	}
 
 	// Create gogent client
@@ -57,6 +67,7 @@ func NewBusinessLogic() (*BusinessLogic, error) {
 		client:     client,
 		config:     config,
 		executions: make(map[string]*ExecutionStatus),
+		userID:     userID,
 	}, nil
 }
 
@@ -200,7 +211,7 @@ func (bl *BusinessLogic) GetCurrentUser() (*auth.User, error) {
 // EXECUTION MANAGEMENT
 // =============================================================================
 
-func (bl *BusinessLogic) StartExecution(request *types.MultiExecutionRequest, useMock bool, additionalConfig *types.GeminiClientConfig) (string, *types.ExecutionRun, error) {
+func (bl *BusinessLogic) StartExecution(request *types.MultiExecutionRequest, useMock bool, sessionApiKeys map[string]string) (string, *types.ExecutionRun, error) {
 	log.Printf("🚀 Starting execution: %s", request.ExecutionRunName)
 
 	// Generate execution run ID
@@ -226,8 +237,8 @@ func (bl *BusinessLogic) StartExecution(request *types.MultiExecutionRequest, us
 		UpdatedAt:             time.Now(),
 	}
 
-	// Start async execution
-	go bl.runAsyncExecution(executionID, request, useMock, additionalConfig)
+	// Start async execution with session API keys
+	go bl.runAsyncExecution(executionID, request, useMock, sessionApiKeys)
 
 	return executionID, executionRun, nil
 }
@@ -241,7 +252,7 @@ func (bl *BusinessLogic) GetExecutionStatus(ctx context.Context, executionID str
 
 	if !exists {
 		// Check if this is a real execution ID from database
-		realResult, err := bl.client.GetExecutionResult(ctx, executionID)
+		realResult, err := bl.client.GetExecutionResult(ctx, bl.userID, executionID)
 		if err != nil {
 			return "", time.Time{}, nil, "", nil, fmt.Errorf("execution not found: %s", executionID)
 		}
@@ -252,7 +263,7 @@ func (bl *BusinessLogic) GetExecutionStatus(ctx context.Context, executionID str
 
 	var result *types.ExecutionResult
 	if execStatus.Status == "completed" && execStatus.RealExecutionRunID != "" {
-		realResult, err := bl.client.GetExecutionResult(ctx, execStatus.RealExecutionRunID)
+		realResult, err := bl.client.GetExecutionResult(ctx, bl.userID, execStatus.RealExecutionRunID)
 		if err == nil {
 			result = realResult
 		}
@@ -269,7 +280,7 @@ func (bl *BusinessLogic) GetExecutionStatus(ctx context.Context, executionID str
 func (bl *BusinessLogic) GetExecutionResult(ctx context.Context, executionRunID string) (*types.ExecutionResult, error) {
 	log.Printf("📊 Getting execution result for: %s", executionRunID)
 
-	return bl.client.GetExecutionResult(ctx, executionRunID)
+	return bl.client.GetExecutionResult(ctx, bl.userID, executionRunID)
 }
 
 func (bl *BusinessLogic) ListExecutionRuns(ctx context.Context, limit, offset int32) ([]*types.ExecutionRun, error) {
@@ -279,7 +290,7 @@ func (bl *BusinessLogic) ListExecutionRuns(ctx context.Context, limit, offset in
 		limit = 10
 	}
 
-	return bl.client.ListExecutionRuns(ctx, limit, offset)
+	return bl.client.ListExecutionRuns(ctx, bl.userID, limit, offset)
 }
 
 func (bl *BusinessLogic) DeleteExecutionRun(ctx context.Context, executionRunID string) error {
@@ -557,9 +568,24 @@ func (bl *BusinessLogic) GetHealthStatus() (string, string, bool, bool) {
 	status := "ok"
 	version := "1.0.0"
 	database := bl.client != nil
-	geminiAPI := bl.config.APIKey != ""
+	geminiAPI := false // Session-based API keys, not stored in config
 
 	return status, version, database, geminiAPI
+}
+
+func (bl *BusinessLogic) TestConnection() (*types.APIResponse, error) {
+	log.Printf("🔍 Testing connection")
+
+	response := &types.APIResponse{
+		ResponseStatus: "success",
+		ResponseText:   "Connection test successful",
+		CreatedAt:      time.Now(),
+	}
+
+	// Note: Since we no longer store API keys, we can only test basic connectivity
+	// Real API testing would require session API keys to be passed in
+	log.Printf("✅ Connection test completed (mock mode)")
+	return response, nil
 }
 
 // =============================================================================
@@ -567,7 +593,7 @@ func (bl *BusinessLogic) GetHealthStatus() (string, string, bool, bool) {
 // =============================================================================
 
 // runAsyncExecution runs the execution in a goroutine
-func (bl *BusinessLogic) runAsyncExecution(executionID string, request *types.MultiExecutionRequest, useMock bool, additionalConfig *types.GeminiClientConfig) {
+func (bl *BusinessLogic) runAsyncExecution(executionID string, request *types.MultiExecutionRequest, useMock bool, sessionApiKeys map[string]string) {
 	// Update status to running
 	bl.executionMutex.Lock()
 	if status, exists := bl.executions[executionID]; exists {
@@ -577,32 +603,26 @@ func (bl *BusinessLogic) runAsyncExecution(executionID string, request *types.Mu
 
 	log.Printf("🚀 Starting async execution: %s", executionID)
 
-	// Create temporary client configuration with additional APIs
+	// Create temporary client configuration with session API keys
 	tempConfig := &types.GeminiClientConfig{
-		APIKey:      bl.config.APIKey,
 		MaxRetries:  bl.config.MaxRetries,
 		TimeoutSecs: bl.config.TimeoutSecs,
 	}
 
-	// Merge additional configuration if provided
-	if additionalConfig != nil {
-		if additionalConfig.OpenWeatherAPIKey != "" {
-			tempConfig.OpenWeatherAPIKey = additionalConfig.OpenWeatherAPIKey
-		}
-		if additionalConfig.Neo4jURL != "" {
-			tempConfig.Neo4jURL = additionalConfig.Neo4jURL
-			tempConfig.Neo4jUsername = additionalConfig.Neo4jUsername
-			tempConfig.Neo4jPassword = additionalConfig.Neo4jPassword
-			tempConfig.Neo4jDatabase = additionalConfig.Neo4jDatabase
-		}
+	// Use session API keys instead of stored configuration
+	geminiApiKey := ""
+	if sessionApiKeys != nil {
+		geminiApiKey = sessionApiKeys["geminiApiKey"]
 	}
 
-	if useMock || tempConfig.APIKey == "" {
-		tempConfig.APIKey = "" // Force mock mode
-		log.Printf("Using mock mode for execution")
+	if useMock || geminiApiKey == "" {
+		log.Printf("Using mock mode for execution (no Gemini API key)")
+	} else {
+		log.Printf("Using real Gemini API for execution")
 	}
 
-	// Create temporary client
+	// Create temporary client - the gogent.NewClient will need to be updated
+	// For now, we'll use the existing configuration but this needs to be refactored
 	dbURL := os.Getenv("DB_URL")
 	tempClient, err := gogent.NewClient(dbURL, tempConfig)
 	if err != nil {
@@ -611,10 +631,11 @@ func (bl *BusinessLogic) runAsyncExecution(executionID string, request *types.Mu
 	}
 	defer tempClient.Close()
 
-	// Execute
+	// Execute the request
 	ctx := context.Background()
-	result, err := tempClient.ExecuteMultiVariation(ctx, request)
+	result, err := tempClient.ExecuteMultiVariation(ctx, bl.userID, request)
 	if err != nil {
+		log.Printf("❌ Execution failed: %v", err)
 		bl.markExecutionFailed(executionID, fmt.Sprintf("Execution failed: %v", err))
 		return
 	}

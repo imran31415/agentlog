@@ -103,13 +103,13 @@ func (as *AuthService) CreateTemporaryUser(sessionID string) (*User, string, str
 }
 
 // Login authenticates a user and returns a JWT token
-func (as *AuthService) Login(username, password string) (*User, string, error) {
-	// Get user from database
+func (as *AuthService) Login(usernameOrEmail, password string) (*User, string, error) {
+	// Get user from database - try both username and email
 	query := `
 		SELECT id, username, email, password_hash, email_verified, is_temporary, 
 		       created_at, updated_at, last_login_at
 		FROM users 
-		WHERE username = ?
+		WHERE username = ? OR email = ?
 	`
 
 	var user User
@@ -117,7 +117,7 @@ func (as *AuthService) Login(username, password string) (*User, string, error) {
 	var email sql.NullString
 	var lastLoginAt sql.NullTime
 
-	err := as.db.QueryRow(query, username).Scan(
+	err := as.db.QueryRow(query, usernameOrEmail, usernameOrEmail).Scan(
 		&user.ID, &user.Username, &email, &passwordHash,
 		&user.EmailVerified, &user.IsTemporary, &user.CreatedAt, &user.UpdatedAt, &lastLoginAt,
 	)
@@ -157,7 +157,7 @@ func (as *AuthService) Login(username, password string) (*User, string, error) {
 		return nil, "", fmt.Errorf("failed to generate token: %w", err)
 	}
 
-	log.Printf("✅ User logged in: %s", username)
+	log.Printf("✅ User logged in: %s (using %s)", user.Username, usernameOrEmail)
 	return &user, token, nil
 }
 
@@ -283,6 +283,68 @@ func (as *AuthService) SaveTemporaryAccount(userID, email, currentPassword strin
 
 	log.Printf("✅ Temporary account saved: %s -> %s", user.Username, email)
 	return user, nil
+}
+
+// ConnectTemporaryAccount connects a temporary account to an email with a new password
+func (as *AuthService) ConnectTemporaryAccount(userID, email, newPassword string) (*User, string, error) {
+	// Get current user
+	user, err := as.GetUserByID(userID)
+	if err != nil {
+		return nil, "", fmt.Errorf("user not found: %w", err)
+	}
+
+	if !user.IsTemporary {
+		return nil, "", fmt.Errorf("user is not temporary")
+	}
+
+	// Validate password
+	if len(newPassword) < 6 {
+		return nil, "", fmt.Errorf("password must be at least 6 characters long")
+	}
+
+	// Check if email already exists
+	var exists bool
+	err = as.db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE email = ? AND id != ?)", email, userID).Scan(&exists)
+	if err != nil {
+		return nil, "", fmt.Errorf("database error: %w", err)
+	}
+	if exists {
+		return nil, "", fmt.Errorf("email already exists")
+	}
+
+	// Hash new password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	// Update user with email, new password, and convert to permanent
+	now := time.Now()
+	query := `
+		UPDATE users 
+		SET email = ?, password_hash = ?, is_temporary = FALSE, updated_at = ?
+		WHERE id = ?
+	`
+
+	_, err = as.db.Exec(query, email, string(hashedPassword), now, userID)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to update user: %w", err)
+	}
+
+	// Get updated user
+	user, err = as.GetUserByID(userID)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get updated user: %w", err)
+	}
+
+	// Generate new JWT token
+	token, err := as.generateToken(user)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate token: %w", err)
+	}
+
+	log.Printf("✅ Temporary account connected: %s -> %s with new password", user.Username, email)
+	return user, token, nil
 }
 
 // VerifyEmail verifies a user's email address

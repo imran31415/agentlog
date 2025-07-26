@@ -56,6 +56,18 @@ type SaveTemporaryAccountResponse struct {
 	EmailSent bool  `json:"email_sent"`
 }
 
+// ConnectTemporaryAccountRequest represents the connect temporary account request
+type ConnectTemporaryAccountRequest struct {
+	Email       string `json:"email"`
+	NewPassword string `json:"newPassword"`
+}
+
+// ConnectTemporaryAccountResponse represents the connect temporary account response
+type ConnectTemporaryAccountResponse struct {
+	Token string `json:"token"`
+	User  *User  `json:"user"`
+}
+
 // VerifyEmailRequest represents the email verification request
 type VerifyEmailRequest struct {
 	Token string `json:"token"`
@@ -203,6 +215,41 @@ func (ah *AuthHandlers) SaveTemporaryAccountHandler(w http.ResponseWriter, r *ht
 	response := SaveTemporaryAccountResponse{
 		User:      updatedUser,
 		EmailSent: emailSent,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// ConnectTemporaryAccountHandler handles connecting temporary accounts to email with new password
+func (ah *AuthHandlers) ConnectTemporaryAccountHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ConnectTemporaryAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Get user from context (must be authenticated)
+	user, ok := GetUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	updatedUser, newToken, err := ah.authService.ConnectTemporaryAccount(user.ID, req.Email, req.NewPassword)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	response := ConnectTemporaryAccountResponse{
+		Token: newToken,
+		User:  updatedUser,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

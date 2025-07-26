@@ -1,0 +1,14 @@
+"use strict";
+'use client';
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = void 0;
+var _codegenNativeComponent = _interopRequireDefault(require("react-native/Libraries/Utilities/codegenNativeComponent"));
+function _interopRequireDefault(e) { return e && e.__esModule ? e : { default: e }; }
+// Internal export, not part of stable library API.
+var _default = exports.default = (0, _codegenNativeComponent.default)('RNSFullWindowOverlay', {
+  interfaceOnly: true
+});
+//# sourceMappingURL=FullWindowOverlayNativeComponent.js.map
