@@ -45,7 +45,7 @@
     "@react-navigation/native": "^7.1.6",
     "@react-navigation/stack": "^7.4.3",
     "@types/crypto-js": "^4.2.2",
-    "axios": "^1.7.9",
+    "axios": "^1.12.1",
     "crypto-js": "^4.2.0",
     "expo": "~52.0.17",
     "expo-constants": "~17.0.8",
