@@ -71,7 +71,7 @@
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react": "^16.3.0",
     "@testing-library/react-hooks": "^8.0.1",
-    "@testing-library/react-native": "^13.2.0",
+    "@testing-library/react-native": "^13.3.3",
     "@types/google-protobuf": "^3.15.12",
     "@types/jest": "^30.0.0",
     "@types/react": "~18.3.12",
