@@ -5303,10 +5303,10 @@ graphemer@^1.4.0:
   resolved "https://registry.yarnpkg.com/graphemer/-/graphemer-1.4.0.tgz#fb2f1d55e0e3a1849aeffc90c4fa0dd53a0e66c6"
   integrity sha512-EtKwoO6kxCL9WO5xipiHTZlSzBm7WLT627TqC/uVRd0HKmq8NXyebnNYxDoBi7wt8eTWrUrKXCOVaFq9x1kgag==
 
-grpc-web@^1.5.0:
-  version "1.5.0"
-  resolved "https://registry.yarnpkg.com/grpc-web/-/grpc-web-1.5.0.tgz#154e4007ab59a94bf7726b87ef6c5bd8815ecf6e"
-  integrity sha512-y1tS3BBIoiVSzKTDF3Hm7E8hV2n7YY7pO0Uo7depfWJqKzWE+SKr0jvHNIJsJJYILQlpYShpi/DRJJMbosgDMQ==
+grpc-web@^2.0.1:
+  version "2.0.1"
+  resolved "https://registry.yarnpkg.com/grpc-web/-/grpc-web-2.0.1.tgz#42ee41dd60d735b08342fbdbd8e0688d79552a97"
+  integrity sha512-jo5b5HKDUlBrCgs0SKleMwQGgYOX0Lhhb4OGyTcVCR1/68IbG4tc/N2RBT6qLNxukeGlebyYGpA9I1dN6HFivQ==
 
 has-bigints@^1.0.2:
   version "1.1.0"
