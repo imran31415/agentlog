@@ -2331,19 +2331,10 @@
     use-latest-callback "^0.2.4"
     use-sync-external-store "^1.5.0"
 
-"@react-navigation/elements@^2.6.1":
-  version "2.6.1"
-  resolved "https://registry.yarnpkg.com/@react-navigation/elements/-/elements-2.6.1.tgz#c101f0b72b48024c8fe3ee09eccb871fa398f761"
-  integrity sha512-kVbIo+5FaqJv6MiYUR6nQHiw+10dmmH/P10C29wrH9S6fr7k69fImHGeiOI/h7SMDJ2vjWhftyEjqYO+c2LG/w==
-  dependencies:
-    color "^4.2.3"
-    use-latest-callback "^0.2.4"
-    use-sync-external-store "^1.5.0"
-
-"@react-navigation/elements@^2.6.3":
-  version "2.6.3"
-  resolved "https://registry.yarnpkg.com/@react-navigation/elements/-/elements-2.6.3.tgz#77cc4d989c0831ec59dc87b982f18bc644ac8e67"
-  integrity sha512-hcPXssZg5bFD5oKX7FP0D9ZXinRgPUHkUJbTegpenSEUJcPooH1qzWJkEP22GrtO+OPDLYrCVZxEX8FcMrn4pA==
+"@react-navigation/elements@^2.6.3", "@react-navigation/elements@^2.6.4":
+  version "2.9.5"
+  resolved "https://registry.yarnpkg.com/@react-navigation/elements/-/elements-2.9.5.tgz#29f68c4975351724dcfe1d3bdc76c4d6dc65fc33"
+  integrity sha512-iHZU8rRN1014Upz73AqNVXDvSMZDh5/ktQ1CMe21rdgnOY79RWtHHBp9qOS3VtqlUVYGkuX5GEw5mDt4tKdl0g==
   dependencies:
     color "^4.2.3"
     use-latest-callback "^0.2.4"
@@ -2367,12 +2358,12 @@
   dependencies:
     nanoid "^3.3.11"
 
-"@react-navigation/stack@^7.4.3":
-  version "7.4.4"
-  resolved "https://registry.yarnpkg.com/@react-navigation/stack/-/stack-7.4.4.tgz#45f58763ec33f2e2337eee99696d9aef8e63fe8e"
-  integrity sha512-2TjeTRCjE6W8OgbZ3dt88FwESVqbZLOQkVijNdj0xSQ67awDwNmunyp5vsvNsIlXUNsc21w/iddr25euK0YwkA==
+"@react-navigation/stack@^7.4.8":
+  version "7.4.8"
+  resolved "https://registry.yarnpkg.com/@react-navigation/stack/-/stack-7.4.8.tgz#8f3c32753bcecabf087e337dcd6558e45ade8bb3"
+  integrity sha512-zZsX52Nw1gsq33Hx4aNgGV2RmDJgVJM71udomCi3OdlntqXDguav3J2t5oe/Acf/9uU8JiJE9W8JGtoRZ6nXIg==
   dependencies:
-    "@react-navigation/elements" "^2.6.1"
+    "@react-navigation/elements" "^2.6.4"
     color "^4.2.3"
 
 "@rtsao/scc@^1.1.0":
