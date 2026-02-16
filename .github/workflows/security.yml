@@ -41,7 +41,7 @@ jobs:
         echo "Vulnerability report generated"
 
     - name: Upload vulnerability report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       if: always()
       with:
         name: vulnerability-report
@@ -135,7 +135,7 @@ jobs:
         cat licenses.txt
 
     - name: Upload license report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       if: always()
       with:
         name: license-report
