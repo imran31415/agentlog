@@ -4879,10 +4879,10 @@ expo-modules-core@2.2.3:
   dependencies:
     invariant "^2.2.4"
 
-expo-status-bar@~2.0.0:
-  version "2.0.1"
-  resolved "https://registry.yarnpkg.com/expo-status-bar/-/expo-status-bar-2.0.1.tgz#fc07726346dc30fbb68aadb0d7890b34fba42eee"
-  integrity sha512-AkIPX7jWHRPp83UBZ1iXtVvyr0g+DgBVvIXTtlmPtmUsm8Vq9Bb5IGj86PW8osuFlgoTVAg7HI/+Ok7yEYwiRg==
+expo-status-bar@~56.0.4:
+  version "56.0.4"
+  resolved "https://registry.yarnpkg.com/expo-status-bar/-/expo-status-bar-56.0.4.tgz#01a0b6f9946ae51fe9d85c961ae9b485383cfcab"
+  integrity sha512-IGs/fDfkHXofy2ZQrGiXayhFK04HB85FZXorhcEhDZEcqASKgSqpak+HwUtAaR0MeTJwWyHNF7I6VmVbbp8EcA==
 
 expo@~52.0.17:
   version "52.0.47"
